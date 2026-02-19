@@ -4,7 +4,7 @@
 
 **Goal:** Reduce A/V latency in the web viewer and improve stream reliability. Work in a separate dev branch.
 
-- [ ] Create dev branch for stream architecture work
+- [x] Create dev branch for stream architecture work
 - [ ] Investigate WebRTC / MSE / HLS for combined A/V in browser
 - [ ] Prototype chosen approach — get synced A/V below 2s total latency
 - [ ] Investigate RTSP keepalive to prevent camera's 275s session timeout
@@ -32,7 +32,7 @@
 
 | Sprint | Status | Notes |
 |--------|--------|-------|
-| 1 | Not started | Dev branch needs to be created |
+| 1 | In progress | Dev branch created, investigation and quick wins phase |
 | 2 | Planned | After Sprint 1 fundamentals are solid |
 | 3 | Future | Depends on Sprint 1-2 stability |
 

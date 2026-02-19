@@ -43,7 +43,7 @@ This is a future decision, not a quick fix.
 **Priority:** Medium (stream auto-recovers, but freeze is visible)
 
 ### Symptom
-Video stream freezes completely every ~4 minutes 35 seconds. Browser shows static image with "LIVE" indicator still showing. Terminal shows WARNING about stale frames. Stream auto-recovers within 2-3 seconds.
+Video stream freezes completely every ~4 minutes 35 seconds. Browser shows static image with "LIVE" indicator still showing. Terminal shows WARNING about stale frames. Total visible freeze: ~7 seconds (5s stale detection threshold + ~2s restart).
 
 ### Root cause — confirmed with high confidence
 The Foscam R2 camera has a fixed RTSP session timeout of approximately **275 seconds (~4:35)**. When this timeout fires, the camera silently drops the RTSP connection. ffmpeg's process stays alive but stops producing frames. Our stale frame detection fires 5 seconds later, kills ffmpeg, and restarts it.
@@ -54,7 +54,7 @@ Tested over 4 consecutive cycles. Interval between freezes: 4:38, 4:39, 4:40, 4:
 **Happens on both UDP and TCP transport** — ruling out packet loss as cause.
 
 ### Current state
-Auto-recovery works reliably. Freeze visible for ~2 seconds, then stream resumes. Each resume connects clean on first try (after probesize fix — see Issue 3 below).
+Auto-recovery works reliably. ffmpeg restarts in ~2 seconds, but total visible freeze is ~7 seconds (includes 5s stale detection wait). Each resume connects clean on first try (after probesize fix — see Issue 3 below). Reducing stale threshold from 5s to 2s would cut total freeze to ~4s.
 
 ### Remaining options (not yet implemented)
 - **Reduce stale detection from 5s to 2s** — recovery would be barely noticeable
@@ -119,7 +119,7 @@ This endpoint is primarily for situations where A/V sync matters more than laten
 
 - Web viewer video: smooth 25fps, ~1s latency, reliable
 - MJPEG source: shared single ffmpeg for all clients (efficient)
-- Stream recovery: auto-restarts within 2-3 seconds after camera timeout
+- Stream recovery: auto-restarts (ffmpeg restart ~2s, total visible freeze ~7s with 5s stale threshold)
 - TCP/UDP switchable at runtime without restart
 - All PTZ, IR, image, recording, OSD controls working
 - Patrol feature: server-side daemon, survives browser close

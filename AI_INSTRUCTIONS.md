@@ -36,7 +36,7 @@ R2_webcam/
 ├── AI_INSTRUCTIONS.md          # THIS FILE — AI rules, hierarchy, agents
 ├── README.md                   # User-facing overview, features, usage
 ├── nerdcam.py                  # Main application (Python 3 + ffmpeg, ~2200 lines)
-├── nerdcam_template.html       # Web viewer HTML/JS template (injected at runtime)
+├── nerdcam_template.html       # Web viewer HTML/JS template (→ nerdcam.html generated at runtime, git-ignored)
 ├── config.example.json         # Example config structure for reference
 ├── config.enc                  # Encrypted credentials (git-ignored)
 ├── nerdcam.log                 # Runtime log (git-ignored)
@@ -49,8 +49,7 @@ R2_webcam/
 │
 ├── docs/                       # Analysis, diagnostics, technical docs
 │   ├── ISSUES_REPORT.md        # Current known issues and their status
-│   ├── STREAM_ANALYSIS.md      # Stream architecture analysis and findings
-│   └── TROUBLESHOOTING_PLAN.md # Diagnostic plans and test results
+│   └── STREAM_ANALYSIS.md      # Stream architecture analysis and findings
 │
 ├── recordings/                 # Local recording output (git-ignored)
 │
@@ -93,6 +92,7 @@ NerdPudding is a separate AI processing app that consumes `/api/mjpeg` as its ca
 - **A/V desync in browser** — video (`<img>` MJPEG, ~1s latency) and audio (`<Audio>` MP3, ~5s latency) are separate streams. Cannot be synced without architectural change (WebRTC/MSE/HLS). Only affects Use Case 1.
 - **Camera RTSP timeout** — Foscam R2 drops RTSP sessions every ~275s. Auto-recovery works but total visible freeze is ~7s (5s stale detection + 2s restart). Affects both use cases. RTSP keepalive may prevent this.
 - **MJPEG re-encodes** — `/api/mjpeg` transcodes H.264 to MJPEG, losing quality. By design for browser compatibility and NerdPudding's JPEG-native pipeline. Quality setting matters for AI inference.
+- **Concurrent RTSP session limit** — Camera likely supports 2-3 simultaneous RTSP sessions. MJPEG source + audio + recording = 3 sessions. Untested whether camera enforces a hard limit. MSE architecture (single combined A/V session) would reduce this.
 
 ### Current Priority
 Reduce A/V latency and improve sync — may require rethinking streaming architecture. Work happens in a separate development branch. `/api/mjpeg` must remain stable throughout.

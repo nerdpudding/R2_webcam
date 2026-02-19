@@ -20,6 +20,3 @@ nerdcam.log
 __pycache__/
 *.pyc
 *.pyo
-
-# Claude plans
-claude_plans/
