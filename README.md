@@ -245,6 +245,15 @@ To avoid the camera's IP changing after a reboot or power loss, configure a **DH
 
 **Important:** The Foscam R2 has **two separate MAC addresses** - one for its Ethernet adapter and one for its WiFi adapter. The camera can only use one connection at a time (Ethernet OR WiFi, not both simultaneously). If you set up a DHCP reservation, make sure you use the MAC address of the interface you'll actually be using. If you want to use WiFi, configure WiFi first while connected via Ethernet, then unplug the cable - the camera will switch to its WiFi adapter. You can usually find both MAC addresses in your router's client list or via option **i** (Device Info) in NerdCam.
 
+## Project Structure & Documentation
+
+See [AI_INSTRUCTIONS.md](AI_INSTRUCTIONS.md) for the full project hierarchy, architecture details, and known issues.
+
+Key docs:
+- [concepts/concept.md](concepts/concept.md) — Vision, architecture diagrams, technical decisions
+- [docs/ISSUES_REPORT.md](docs/ISSUES_REPORT.md) — Current known issues and their status
+- [docs/STREAM_ANALYSIS.md](docs/STREAM_ANALYSIS.md) — Stream architecture analysis
+
 ## Files
 
 | File | Purpose |
