@@ -13,6 +13,9 @@ snapshot_*.jpg
 # Recordings
 recordings/
 
+# Log file
+nerdcam.log
+
 # Python
 __pycache__/
 *.pyc

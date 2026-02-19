@@ -130,6 +130,14 @@ var _ptzCmd = null;
 var _ptzStart = 0;
 
 function ptzDown(cmd) {
+    // Auto-stop patrol on manual PTZ movement
+    var btn = document.getElementById("btnPatrol");
+    if (btn && btn.classList.contains("danger")) {
+        fetch("/api/patrol?action=stop").then(function(r) { return r.json(); }).then(function(d) {
+            updatePatrolUI(d);
+            log("Patrol auto-stopped (manual PTZ)");
+        });
+    }
     if (_ptzTimer) { clearTimeout(_ptzTimer); _ptzTimer = null; }
     _ptzCmd = cmd;
     _ptzStart = Date.now();
@@ -148,6 +156,28 @@ function ptzUp() {
         // Held long enough: stop immediately
         send("ptzStopRun");
     }
+}
+
+function gotoPreset(name) {
+    // Auto-stop patrol on manual preset go
+    var btn = document.getElementById("btnPatrol");
+    if (btn && btn.classList.contains("danger")) {
+        fetch("/api/patrol?action=stop").then(function(r) { return r.json(); }).then(function(d) {
+            updatePatrolUI(d);
+            log("Patrol auto-stopped (manual preset)");
+        });
+    }
+    send('ptzGotoPresetPoint', 'name=' + name);
+}
+
+function ptzHome() {
+    send("ptzReset", null, function() {
+        setTimeout(function() {
+            send("getImageSetting", null, function(r) {
+                if (r.brightness) log("Home position reached. Brightness: " + r.brightness + " (auto-exposure adjusting to scene)");
+            });
+        }, 2000);
+    });
 }
 
 // Stream viewer with proper state tracking
@@ -293,17 +323,28 @@ function togglePanel(el) {
 // Audio - live mic from camera via MP3 stream
 var _audioEl = null;
 
+function _stopAudio() {
+    if (_audioEl) {
+        _audioEl.pause();
+        _audioEl.removeAttribute("src");
+        _audioEl.load();
+        _audioEl = null;
+    }
+}
+
+function _startAudio() {
+    _audioEl = new Audio("/api/audio?t=" + Date.now());
+    _audioEl.play().catch(function() {});
+}
+
 function toggleAudio() {
     var btn = document.getElementById("btnAudio");
     if (_audioEl) {
-        _audioEl.pause();
-        _audioEl.src = "";
-        _audioEl = null;
+        _stopAudio();
         btn.textContent = "Enable Mic";
         btn.classList.remove("active");
     } else {
-        _audioEl = new Audio("/api/audio?t=" + Date.now());
-        _audioEl.play();
+        _startAudio();
         btn.textContent = "Mic Enabled";
         btn.classList.add("active");
     }
@@ -355,10 +396,8 @@ function debounceMicGain(val) {
             log("Mic gain set to " + val + "x");
             // Auto-restart audio if playing
             if (_audioEl) {
-                _audioEl.pause();
-                _audioEl.src = "";
-                _audioEl = new Audio("/api/audio?t=" + Date.now());
-                _audioEl.play();
+                _stopAudio();
+                _startAudio();
             }
         });
     }, 400);
@@ -375,6 +414,13 @@ function setRecCodec(val) {
 function setRecGpu(val) {
     fetch("/api/settings?rec_gpu=" + val).then(function() {
         log("Recording GPU: " + val);
+    });
+}
+
+function setRtspTransport(val) {
+    fetch("/api/settings?rtsp_transport=" + val).then(function() {
+        log("RTSP transport: " + val + " (stream restarting...)");
+        // Stream will restart automatically on next MJPEG request
     });
 }
 
@@ -418,6 +464,10 @@ function loadSettings() {
             }
             var lbl = document.getElementById("compLabel");
             if (lbl) lbl.textContent = _compLabels[d.rec_compression] || "";
+        }
+        if (d.rtsp_transport) {
+            var rt = document.getElementById("selRtspTransport");
+            if (rt) rt.value = d.rtsp_transport;
         }
         if (d.gpus && d.gpus.length > 1) {
             var gpuRow = document.getElementById("gpuRow");
@@ -526,6 +576,70 @@ function setVal(id, val) {
     if (el) { el.value = val; el.nextElementSibling.textContent = val; }
 }
 
+// Patrol
+var _patrolTimer = null;
+
+function togglePatrol() {
+    var btn = document.getElementById("btnPatrol");
+    var action = btn.classList.contains("danger") ? "stop" : "start";
+    fetch("/api/patrol?action=" + action).then(function(r) { return r.json(); }).then(function(d) {
+        updatePatrolUI(d);
+        if (d.error) log("Patrol: " + d.error);
+    });
+}
+
+function updatePatrolUI(d) {
+    var btn = document.getElementById("btnPatrol");
+    var status = document.getElementById("patrolStatus");
+    if (d.running) {
+        btn.textContent = "Stop Patrol";
+        btn.classList.add("danger");
+        status.style.display = "block";
+        status.textContent = "Position: " + (d.current_pos || "...") + " | Cycle: " + d.cycle;
+        if (!_patrolTimer) {
+            _patrolTimer = setInterval(pollPatrolStatus, 2000);
+        }
+    } else {
+        btn.textContent = "Start Patrol";
+        btn.classList.remove("danger");
+        status.style.display = "none";
+        if (_patrolTimer) { clearInterval(_patrolTimer); _patrolTimer = null; }
+    }
+}
+
+function pollPatrolStatus() {
+    fetch("/api/patrol?action=status").then(function(r) { return r.json(); }).then(function(d) {
+        updatePatrolUI(d);
+    }).catch(function() {});
+}
+
+function loadPatrolConfig() {
+    fetch("/api/patrol?action=config").then(function(r) { return r.json(); }).then(function(d) {
+        updatePatrolUI(d);
+        var cfg = d.config || {};
+        var positions = cfg.positions || [];
+        for (var i = 0; i < positions.length; i++) {
+            var el = document.getElementById("patrolDwell" + (i + 1));
+            if (el) el.value = positions[i].dwell || 0;
+        }
+        var rep = document.getElementById("patrolRepeat");
+        if (rep) rep.checked = cfg.repeat !== false;
+    }).catch(function() {});
+}
+
+function savePatrolConfig() {
+    var positions = [];
+    for (var i = 1; i <= 4; i++) {
+        var el = document.getElementById("patrolDwell" + i);
+        var dwell = el ? parseInt(el.value) || 0 : 0;
+        positions.push({"name": "pos" + i, "dwell": dwell});
+    }
+    var repeat = document.getElementById("patrolRepeat").checked;
+    fetch("/api/patrol?action=config&positions=" + encodeURIComponent(JSON.stringify(positions)) + "&repeat=" + repeat)
+        .then(function(r) { return r.json(); })
+        .then(function(d) { log("Patrol config saved"); });
+}
+
 function init() {
     // Bind PTZ hold-to-move events (mouse + touch)
     document.querySelectorAll('[data-ptz]').forEach(function(btn) {
@@ -544,6 +658,13 @@ function init() {
     loadIR();
     loadOSD();
     checkRecordingStatus();
+    loadPatrolConfig();
+    send("getPTZSpeed", null, function(r) {
+        if (r.speed !== undefined) {
+            var el = document.getElementById("selPtzSpeed");
+            if (el) el.value = r.speed;
+        }
+    });
     send("getAudioVolume", null, function(r) {
         if (r.volume) setVal("slVolume", r.volume);
     });
@@ -572,7 +693,7 @@ function init() {
                     <button data-ptz="ptzMoveUp">&#8593;</button>
                     <button data-ptz="ptzMoveTopRight">&#8599;</button>
                     <button data-ptz="ptzMoveLeft">&#8592;</button>
-                    <button onclick="send('ptzReset')" class="home">HOME</button>
+                    <button onclick="ptzHome()" class="home" title="Return to home position. Brightness may shift as the camera adjusts auto-exposure to the new scene.">HOME</button>
                     <button data-ptz="ptzMoveRight">&#8594;</button>
                     <button data-ptz="ptzMoveBottomLeft">&#8601;</button>
                     <button data-ptz="ptzMoveDown">&#8595;</button>
@@ -580,21 +701,47 @@ function init() {
                 </div>
                 <div class="setting">
                     <label>Speed</label>
-                    <select onchange="send('setPTZSpeed','speed='+this.value)">
-                        <option value="0">Slow</option>
-                        <option value="1">Normal</option>
-                        <option value="2" selected>Fast</option>
-                        <option value="3">Very fast</option>
-                        <option value="4">Fastest</option>
+                    <select id="selPtzSpeed" onchange="send('setPTZSpeed','speed='+this.value)">
+                        <option value="0">Fastest</option>
+                        <option value="1">Fast</option>
+                        <option value="2" selected>Normal</option>
+                        <option value="3">Slow</option>
+                        <option value="4">Slowest</option>
                     </select>
                 </div>
                 <div class="btn-row">
-                    <button class="btn" onclick="send('ptzAddPresetPoint','name=pos1')">Save 1</button>
-                    <button class="btn" onclick="send('ptzGotoPresetPoint','name=pos1')">Go 1</button>
+                    <button class="btn" onclick="gotoPreset('pos1')">Pos 1</button>
+                    <button class="btn" onclick="gotoPreset('pos2')">Pos 2</button>
+                    <button class="btn" onclick="gotoPreset('pos3')">Pos 3</button>
+                    <button class="btn" onclick="gotoPreset('pos4')">Pos 4</button>
                 </div>
-                <div class="btn-row">
-                    <button class="btn" onclick="send('ptzAddPresetPoint','name=pos2')">Save 2</button>
-                    <button class="btn" onclick="send('ptzGotoPresetPoint','name=pos2')">Go 2</button>
+                <a href="#" onclick="var s=document.getElementById('presetSaveSection');s.style.display=s.style.display==='none'?'block':'none';this.textContent=s.style.display==='none'?'Edit presets...':'Hide presets';return false" style="font-size:0.65em;color:#e94560;display:block;margin:3px 0;">Edit presets...</a>
+                <div id="presetSaveSection" style="display:none">
+                    <div class="btn-row">
+                        <button class="btn danger" onclick="if(confirm('Overwrite Pos 1?'))send('ptzAddPresetPoint','name=pos1')">Save 1</button>
+                        <button class="btn danger" onclick="if(confirm('Overwrite Pos 2?'))send('ptzAddPresetPoint','name=pos2')">Save 2</button>
+                    </div>
+                    <div class="btn-row">
+                        <button class="btn danger" onclick="if(confirm('Overwrite Pos 3?'))send('ptzAddPresetPoint','name=pos3')">Save 3</button>
+                        <button class="btn danger" onclick="if(confirm('Overwrite Pos 4?'))send('ptzAddPresetPoint','name=pos4')">Save 4</button>
+                    </div>
+                </div>
+                <div style="border-top:1px solid #0f3460;margin-top:6px;padding-top:6px;">
+                    <div style="font-size:0.68em;color:#e94560;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Patrol</div>
+                    <div class="btn-row">
+                        <button class="btn" id="btnPatrol" onclick="togglePatrol()">Start Patrol</button>
+                    </div>
+                    <div id="patrolStatus" style="font-size:0.65em;color:#7f8c8d;margin-top:2px;display:none;"></div>
+                    <a href="#" onclick="var s=document.getElementById('patrolConfigSection');s.style.display=s.style.display==='none'?'block':'none';this.textContent=s.style.display==='none'?'Configure patrol...':'Hide config';return false" style="font-size:0.65em;color:#e94560;display:block;margin:3px 0;">Configure patrol...</a>
+                    <div id="patrolConfigSection" style="display:none">
+                        <div class="setting"><label>Pos 1 dwell</label><input type="number" id="patrolDwell1" value="0" min="0" max="300" style="width:50px"> <span style="font-size:0.65em;color:#7f8c8d">sec</span></div>
+                        <div class="setting"><label>Pos 2 dwell</label><input type="number" id="patrolDwell2" value="0" min="0" max="300" style="width:50px"> <span style="font-size:0.65em;color:#7f8c8d">sec</span></div>
+                        <div class="setting"><label>Pos 3 dwell</label><input type="number" id="patrolDwell3" value="0" min="0" max="300" style="width:50px"> <span style="font-size:0.65em;color:#7f8c8d">sec</span></div>
+                        <div class="setting"><label>Pos 4 dwell</label><input type="number" id="patrolDwell4" value="0" min="0" max="300" style="width:50px"> <span style="font-size:0.65em;color:#7f8c8d">sec</span></div>
+                        <div class="setting"><label>Repeat</label><input type="checkbox" id="patrolRepeat" checked style="width:auto"></div>
+                        <button class="btn" onclick="savePatrolConfig()">Save Config</button>
+                        <p style="font-size:0.55em;color:#555;margin-top:2px;">Set dwell to 0 to skip a position. Need 2+ positions with dwell &gt; 0.</p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -684,6 +831,14 @@ function init() {
                         <option value="262144">256 kbps</option>
                     </select>
                 </div>
+                <div class="setting">
+                    <label>RTSP transport</label>
+                    <select id="selRtspTransport" onchange="setRtspTransport(this.value)">
+                        <option value="udp" selected>UDP (smooth)</option>
+                        <option value="tcp">TCP (reliable)</option>
+                    </select>
+                </div>
+                <p style="font-size:0.55em;color:#555;margin-top:1px;">UDP = low latency, may freeze during PTZ. TCP = no freezes, may be choppier.</p>
             </div>
         </div>
 

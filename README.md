@@ -88,7 +88,7 @@ The advanced menu gives access to all camera features:
 
 | Option | Feature | What it does |
 |--------|---------|-------------|
-| **1** | PTZ control | Pan, tilt, and zoom using a numpad-style layout (7=up-left, 8=up, 9=up-right, etc.). Manage speed, save/recall preset positions |
+| **1** | PTZ control | Pan, tilt, and zoom using a numpad-style layout (7=up-left, 8=up, 9=up-right, etc.). Manage speed, 4 preset positions, and automated patrol |
 | **2** | Image settings | Adjust brightness, contrast, saturation, sharpness (0-100 range). Toggle mirror and flip |
 | **3** | Infrared / night vision | Switch between auto mode (IR follows ambient light), force IR on, or force IR off |
 | **4** | Video settings | Change resolution (1080p, 720p, VGA, QVGA), framerate (1-30 FPS), bitrate, and keyframe interval. Changes apply instantly |
@@ -124,6 +124,22 @@ The advanced menu gives access to all camera features:
 
 Recording settings are independent: **codec** (what encoder), **compression** (1=studio to 10=max compression), and **GPU** (which NVIDIA GPU, only shown with 2+ GPUs). Available codecs are detected at startup. Files are named `nerdcam_YYYYMMDD_HHMMSS.mp4`.
 
+### Patrol
+
+Patrol automatically cycles the camera between preset positions with configurable dwell times. It runs server-side (daemon thread), so it survives browser close and only stops when the app exits or you explicitly stop it.
+
+**Web UI:** Inside the Pan/Tilt panel — Start/Stop button, status display (current position + cycle count), and a "Configure patrol..." toggle with dwell time inputs for each of the 4 positions.
+
+**CLI:** In PTZ menu: `t` = start patrol, `x` = stop patrol, `c` = configure patrol. Config format: `pos1:10,pos2:30,pos3:15,pos4:0` (position:dwell_seconds, 0 to skip).
+
+**Auto-stop:** Patrol automatically stops when you manually move the camera (direction buttons or preset Go buttons) from either the web UI or CLI.
+
+Patrol config is stored in the encrypted config file and persists between sessions. Config format:
+
+```json
+{"positions": [{"name": "pos1", "dwell": 10}, {"name": "pos2", "dwell": 30}], "repeat": true}
+```
+
 ### Network
 
 | Option | Feature | What it does |
@@ -147,7 +163,7 @@ Recording settings are independent: **codec** (what encoder), **compression** (1
 Option **1** from the main menu opens a web-based control panel in your browser with:
 
 - **Live stream** - MJPEG video feed with proper state tracking (CONNECTING / LIVE / RECONNECTING / STOPPED)
-- **Pan/Tilt controls** - Arrow buttons to move the camera, configurable PTZ duration and speed, preset positions
+- **Pan/Tilt controls** - Arrow buttons to move the camera, configurable PTZ duration and speed, 4 preset positions (Go buttons always visible, Save buttons hidden behind toggle with confirmation dialog), automated patrol with configurable dwell times
 - **Infrared toggle** - Auto, force on, force off
 - **Image adjustments** - Brightness, contrast, saturation, sharpness sliders, mirror/flip
 - **Video settings** - Resolution, framerate, bitrate controls
@@ -172,6 +188,7 @@ When the server is running (options 1 or 2), these local URLs are available:
 | `http://localhost:8088/api/snap` | Single JPEG | Quick snapshot from any HTTP client |
 | `http://localhost:8088/api/settings` | JSON | Read/write app settings (mic gain, recording quality) |
 | `http://localhost:8088/api/record?action=X` | JSON | Start/stop/status for local recording |
+| `http://localhost:8088/api/patrol?action=X` | JSON | Start/stop/status/config for PTZ patrol |
 | `http://localhost:8088/api/cam?cmd=X` | XML | Proxy for camera CGI commands (credentials added server-side) |
 
 These URLs require **no credentials** - the proxy adds them server-side. Any application on your machine can use them.

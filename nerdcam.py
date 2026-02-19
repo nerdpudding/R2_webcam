@@ -9,12 +9,8 @@ Run: python3 nerdcam.py
 import atexit
 import base64
 import hashlib
-
-
-def cls():
-    """Clear terminal screen."""
-    os.system("clear" if os.name != "nt" else "cls")
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -25,13 +21,34 @@ import getpass
 import threading
 import time
 
+
+def cls():
+    """Clear terminal screen."""
+    os.system("clear" if os.name != "nt" else "cls")
+
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_PATH = os.path.join(SCRIPT_DIR, "nerdcam.log")
+
+# Logging: DEBUG+ to file, WARNING+ to terminal (doesn't interfere with menu)
+log = logging.getLogger("nerdcam")
+log.setLevel(logging.DEBUG)
+_log_file = logging.FileHandler(LOG_PATH, encoding="utf-8")
+_log_file.setLevel(logging.DEBUG)
+_log_file.setFormatter(logging.Formatter(
+    "%(asctime)s %(levelname)-5s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+_log_console = logging.StreamHandler()
+_log_console.setLevel(logging.WARNING)
+_log_console.setFormatter(logging.Formatter("  %(levelname)s: %(message)s"))
+log.addHandler(_log_file)
+log.addHandler(_log_console)
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.enc")
 CONFIG_PLAIN = os.path.join(SCRIPT_DIR, "config.json")
 
 _viewer_server = None
 _stream_quality = 7  # 1-10 scale: 10=best quality, 1=lowest. Maps to ffmpeg -q:v internally.
 _mic_gain = 3.0  # Audio volume multiplier for mic stream (1.0-5.0)
+_rtsp_transport = "udp"  # "udp" (smooth/low latency) or "tcp" (reliable/no packet loss)
 
 # Shared MJPEG source: one ffmpeg process, multiple browser clients
 # Uses simple polling (no Condition/Lock) - CPython's GIL makes single
@@ -40,17 +57,25 @@ _mjpeg_frame = None      # latest JPEG frame bytes (written by reader thread)
 _mjpeg_frame_id = 0      # incremented on each new frame (written by reader thread)
 _mjpeg_proc = None        # shared ffmpeg process
 _mjpeg_quality = None     # quality level when source was started
+_mjpeg_last_frame_time = 0  # time.time() when last frame was received
+_MJPEG_STALE_SECONDS = 5    # force-restart if no frame for this long
 
 
 def _start_mjpeg_source(cam):
     """Start shared ffmpeg MJPEG source if not already running."""
-    global _mjpeg_proc, _mjpeg_frame, _mjpeg_frame_id, _mjpeg_quality
+    global _mjpeg_proc, _mjpeg_frame, _mjpeg_frame_id, _mjpeg_quality, _mjpeg_last_frame_time
     if _mjpeg_proc:
         if _mjpeg_proc.poll() is None:
-            if _mjpeg_quality == _stream_quality:
-                return
+            # Process alive — but is it actually producing frames?
+            frame_age = time.time() - _mjpeg_last_frame_time if _mjpeg_last_frame_time else 0
+            if _mjpeg_quality == _stream_quality and frame_age < _MJPEG_STALE_SECONDS:
+                return  # alive and producing frames, nothing to do
+            # Stale or quality changed — kill and restart
+            log.warning("MJPEG source stale (%.1fs no frames), restarting ffmpeg", frame_age)
             _stop_mjpeg_source()
+            time.sleep(0.5)
         else:
+            log.info("MJPEG ffmpeg process died (exit=%s), restarting", _mjpeg_proc.returncode)
             try:
                 _mjpeg_proc.kill()
             except Exception:
@@ -62,14 +87,19 @@ def _start_mjpeg_source(cam):
     rtsp_url = (f"rtsp://{cam['username']}:{cam['password']}"
                 f"@{cam['ip']}:{rtsp_port}/videoMain")
     _mjpeg_quality = _stream_quality
+    # TCP needs larger probesize to find video track in interleaved data.
+    # UDP: 32 bytes is too small and unreliable — 32768 is still tiny but
+    # reliably captures the RTSP SDP which describes all tracks.
+    probe = "500000" if _rtsp_transport == "tcp" else "32768"
+    analyze = "500000" if _rtsp_transport == "tcp" else "0"
+    log.info("Starting MJPEG source (quality=%d, transport=%s, rtsp=%s:%s)", _stream_quality, _rtsp_transport, cam['ip'], rtsp_port)
     proc = subprocess.Popen(
         ["ffmpeg",
          "-fflags", "+nobuffer+flush_packets",
          "-flags", "low_delay",
-         "-probesize", "32",
-         "-analyzeduration", "0",
-         "-rtsp_transport", "udp",
-         "-rtsp_flags", "prefer_tcp",
+         "-probesize", probe,
+         "-analyzeduration", analyze,
+         "-rtsp_transport", _rtsp_transport,
          "-i", rtsp_url,
          "-f", "mjpeg",
          "-q:v", str(int(2 + (10 - _stream_quality) * 29 / 9)),
@@ -84,10 +114,13 @@ def _start_mjpeg_source(cam):
     )
     _mjpeg_proc = proc
 
+    _mjpeg_last_frame_time = time.time()  # reset on new source start
+
     def _mjpeg_reader(p):
         """Read JPEG frames from ffmpeg stdout into shared buffer."""
-        global _mjpeg_frame, _mjpeg_frame_id
+        global _mjpeg_frame, _mjpeg_frame_id, _mjpeg_last_frame_time
         buf = b""
+        frame_count = 0
         try:
             while True:
                 chunk = p.stdout.read(4096)
@@ -103,14 +136,19 @@ def _start_mjpeg_source(cam):
                     buf = buf[end + 2:]
                     _mjpeg_frame = jpeg
                     _mjpeg_frame_id += 1
-        except Exception:
-            pass
+                    _mjpeg_last_frame_time = time.time()
+                    frame_count += 1
+                    if frame_count == 1:
+                        log.info("MJPEG source: first frame received (%d bytes)", len(jpeg))
+        except Exception as e:
+            log.error("MJPEG reader exception: %s", e)
+        log.info("MJPEG reader stopped after %d frames", frame_count)
         if p.poll() and p.stderr:
             try:
                 err = p.stderr.read().decode(errors="replace").strip()
                 if err:
-                    lines = err.splitlines()[-3:]
-                    print(f"  MJPEG source error: {' | '.join(lines)}")
+                    lines = err.splitlines()[-5:]
+                    log.warning("MJPEG ffmpeg stderr:\n  %s", "\n  ".join(lines))
             except Exception:
                 pass
 
@@ -121,6 +159,7 @@ def _stop_mjpeg_source():
     """Stop the shared MJPEG source."""
     global _mjpeg_proc, _mjpeg_frame
     if _mjpeg_proc:
+        log.info("Stopping MJPEG source (pid=%s)", _mjpeg_proc.pid)
         try:
             _mjpeg_proc.kill()
         except Exception:
@@ -342,10 +381,12 @@ def _onboarding_scan_wifi(config):
 
 def _load_settings(config):
     """Restore app settings from config."""
-    global _stream_quality, _mic_gain, _rec_codec, _rec_compression, _rec_gpu
+    global _stream_quality, _mic_gain, _rec_codec, _rec_compression, _rec_gpu, _rtsp_transport
     settings = config.get("settings", {})
     _stream_quality = settings.get("stream_quality", 7)
     _mic_gain = settings.get("mic_gain", 3.0)
+    rt = settings.get("rtsp_transport", "udp")
+    _rtsp_transport = rt if rt in ("udp", "tcp") else "udp"
     rc = settings.get("rec_codec", _DEFAULT_REC_CODEC)
     _rec_codec = rc if rc in REC_CODECS else _DEFAULT_REC_CODEC
     comp = settings.get("rec_compression", 5)
@@ -364,6 +405,7 @@ def _save_settings(config):
     config["settings"]["rec_codec"] = _rec_codec
     config["settings"]["rec_compression"] = _rec_compression
     config["settings"]["rec_gpu"] = _rec_gpu
+    config["settings"]["rtsp_transport"] = _rtsp_transport
     save_config(config)
 
 
@@ -720,7 +762,12 @@ def ptz_menu(config):
     print("             1=DL  2=D  3=DR")
     print("  Speed:     s=set speed")
     print("  Presets:   p=list  g=goto  a=add  d=delete")
+    print("  Patrol:    t=start  x=stop  c=configure")
     print("  q=back")
+
+    status = _get_patrol_status()
+    if status["running"]:
+        print(f"  Patrol: RUNNING (pos={status['current_pos']}, cycle={status['cycle']})")
 
     ptz_cmds = {
         "7": "ptzMoveTopLeft", "8": "ptzMoveUp", "9": "ptzMoveTopRight",
@@ -733,6 +780,9 @@ def ptz_menu(config):
         if choice == "q":
             break
         elif choice in ptz_cmds:
+            if _patrol_running:
+                _stop_patrol()
+                print("  Patrol auto-stopped (manual PTZ)")
             cgi(ptz_cmds[choice], config)
             time.sleep(0.5)
             cgi("ptzStopRun", config)
@@ -741,11 +791,28 @@ def ptz_menu(config):
         elif choice == "p":
             ptz_list_presets(config)
         elif choice == "g":
+            if _patrol_running:
+                _stop_patrol()
+                print("  Patrol auto-stopped (manual preset)")
             ptz_goto_preset(config)
         elif choice == "a":
             ptz_add_preset(config)
         elif choice == "d":
             ptz_delete_preset(config)
+        elif choice == "t":
+            result = _start_patrol(config)
+            if result.get("ok"):
+                print("  Patrol started")
+            else:
+                print(f"  {result.get('error', 'Failed')}")
+        elif choice == "x":
+            result = _stop_patrol()
+            if result.get("ok"):
+                print("  Patrol stopped")
+            else:
+                print(f"  {result.get('error', 'Failed')}")
+        elif choice == "c":
+            _patrol_config_menu(config)
         else:
             print("  Unknown PTZ command")
 
@@ -753,7 +820,7 @@ def ptz_menu(config):
 def ptz_set_speed(config):
     data = cgi("getPTZSpeed", config)
     current = data.get("speed", "?")
-    print(f"  Current speed: {current} (0=slow, 1=normal, 2=fast, 3=very fast, 4=fastest)")
+    print(f"  Current speed: {current} (0=fastest, 1=fast, 2=normal, 3=slow, 4=slowest)")
     speed = input("  New speed (0-4): ").strip()
     if speed in ("0", "1", "2", "3", "4"):
         data = cgi("setPTZSpeed", config, speed=speed)
@@ -791,6 +858,47 @@ def ptz_delete_preset(config):
     if name:
         data = cgi("ptzDeletePresetPoint", config, name=name)
         ok(data, f"ptzDeletePresetPoint({name})")
+
+
+def _patrol_config_menu(config):
+    """Configure patrol positions and dwell times."""
+    patrol_cfg = _get_patrol_config(config)
+    positions = patrol_cfg.get("positions", [])
+    repeat = patrol_cfg.get("repeat", True)
+    print("\n  --- Patrol Config ---")
+    print("  Current positions:")
+    for p in positions:
+        print(f"    {p['name']}: dwell={p['dwell']}s")
+    print(f"  Repeat: {repeat}")
+    print("\n  Enter dwell times (format: pos1:10,pos2:30,pos3:15,pos4:0)")
+    print("  Set dwell to 0 to skip a position. Need 2+ with dwell > 0.")
+    val = input("  Config: ").strip()
+    if not val:
+        print("  Unchanged")
+        return
+    new_positions = []
+    for part in val.split(","):
+        part = part.strip()
+        if ":" not in part:
+            print(f"  Invalid format: {part}")
+            return
+        name, dwell_str = part.split(":", 1)
+        try:
+            dwell = int(dwell_str)
+        except ValueError:
+            print(f"  Invalid dwell time: {dwell_str}")
+            return
+        new_positions.append({"name": name.strip(), "dwell": max(0, dwell)})
+    repeat_in = input(f"  Repeat? (y/n) [{'y' if repeat else 'n'}]: ").strip().lower()
+    if repeat_in == "y":
+        repeat = True
+    elif repeat_in == "n":
+        repeat = False
+    patrol_cfg = {"positions": new_positions, "repeat": repeat}
+    _save_patrol_config(config, patrol_cfg)
+    print("  Patrol config saved")
+    for p in new_positions:
+        print(f"    {p['name']}: dwell={p['dwell']}s")
 
 
 # ---------------------------------------------------------------------------
@@ -1108,7 +1216,7 @@ def open_viewer(config, open_browser=True):
             pass
 
         def do_GET(self):
-            global _mic_gain, _rec_codec, _rec_compression, _rec_gpu
+            global _mic_gain, _rec_codec, _rec_compression, _rec_gpu, _rtsp_transport
             parsed = urlparse(self.path)
 
             # Proxy: /api/cam?cmd=XXX&param=val -> camera CGI
@@ -1118,15 +1226,34 @@ def open_viewer(config, open_browser=True):
                 params["usr"] = cam["username"]
                 params["pwd"] = cam["password"]
                 cam_url = f"{cam_base}?{urllib.parse.urlencode(params)}"
+                cmd_name = params.get("cmd", "?")
+                # Log PTZ and preset commands with their parameters
+                extra_params = {k: v for k, v in params.items() if k not in ("cmd", "usr", "pwd")}
+                if extra_params:
+                    log.debug("CGI: %s %s", cmd_name, extra_params)
+                else:
+                    log.debug("CGI: %s", cmd_name)
                 try:
                     with urllib.request.urlopen(cam_url, timeout=10) as resp:
                         data = resp.read()
+                    # Parse result code for logging
+                    try:
+                        _root = ET.fromstring(data.decode())
+                        _result = {c.tag: c.text or "" for c in _root}
+                        _rc = _result.get("result", "?")
+                        if _rc != "0":
+                            log.warning("CGI: %s returned result=%s", cmd_name, _rc)
+                        elif cmd_name.startswith("ptz"):
+                            log.info("CGI: %s OK %s", cmd_name, extra_params)
+                    except Exception:
+                        pass
                     self.send_response(200)
                     self.send_header("Content-Type", "text/xml")
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
                     self.wfile.write(data)
                 except Exception as e:
+                    log.error("CGI proxy error (cmd=%s): %s", cmd_name, e)
                     self.send_response(502)
                     self.send_header("Content-Type", "text/plain")
                     self.end_headers()
@@ -1161,6 +1288,7 @@ def open_viewer(config, open_browser=True):
                                  "multipart/x-mixed-replace; boundary=ffmpeg")
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
+                log.info("MJPEG client connected from %s", self.client_address[0])
                 try:
                     last_id = 0
                     no_frame_count = 0
@@ -1182,10 +1310,11 @@ def open_viewer(config, open_browser=True):
                             time.sleep(0.02)
                             no_frame_count += 1
                             if no_frame_count >= 250:  # ~5s no frames
+                                log.warning("MJPEG client: %ds no frames, requesting source restart", no_frame_count // 50)
                                 _start_mjpeg_source(cam)
                                 no_frame_count = 0
                 except (BrokenPipeError, ConnectionResetError, OSError):
-                    pass
+                    log.info("MJPEG client disconnected from %s", self.client_address[0])
                 return
 
             # Audio-only stream via ffmpeg (RTSP -> MP3, for browser <audio>)
@@ -1198,14 +1327,17 @@ def open_viewer(config, open_browser=True):
                 self.send_header("Content-Type", "audio/mpeg")
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
+                audio_probe = "500000" if _rtsp_transport == "tcp" else "32768"
+                audio_analyze = "500000" if _rtsp_transport == "tcp" else "0"
+                log.info("Audio stream starting (transport=%s, gain=%.1f)", _rtsp_transport, _mic_gain)
                 try:
                     proc = subprocess.Popen(
                         ["ffmpeg",
                          "-fflags", "+nobuffer+flush_packets",
                          "-flags", "low_delay",
-                         "-probesize", "32",
-                         "-analyzeduration", "0",
-                         "-rtsp_transport", "udp",
+                         "-probesize", audio_probe,
+                         "-analyzeduration", audio_analyze,
+                         "-rtsp_transport", _rtsp_transport,
                          "-i", rtsp_url,
                          "-vn",
                          "-af", f"volume={_mic_gain}",
@@ -1225,9 +1357,9 @@ def open_viewer(config, open_browser=True):
                         self.wfile.write(chunk)
                         self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError, OSError):
-                    pass
-                except Exception:
-                    pass
+                    log.info("Audio stream disconnected")
+                except Exception as e:
+                    log.error("Audio stream error: %s", e)
                 finally:
                     try:
                         proc.kill()
@@ -1266,6 +1398,14 @@ def open_viewer(config, open_browser=True):
                     if val in valid:
                         _rec_gpu = val
                         changed = True
+                if "rtsp_transport" in qs:
+                    val = qs["rtsp_transport"][0]
+                    if val in ("udp", "tcp"):
+                        _rtsp_transport = val
+                        changed = True
+                        # Force MJPEG source restart with new transport
+                        _stop_mjpeg_source()
+                        log.info("RTSP transport changed to %s, MJPEG source will restart on next request", val)
                 if changed:
                     _save_settings(config)
                 import json as _json
@@ -1279,6 +1419,7 @@ def open_viewer(config, open_browser=True):
                     "rec_codec": _rec_codec,
                     "rec_compression": _rec_compression,
                     "rec_gpu": _rec_gpu,
+                    "rtsp_transport": _rtsp_transport,
                     "rec_codecs": codecs_info,
                     "gpus": gpus_info,
                 })
@@ -1307,6 +1448,45 @@ def open_viewer(config, open_browser=True):
                 self.wfile.write(resp_data.encode())
                 return
 
+            # Patrol endpoint (start/stop/status/config)
+            if parsed.path == "/api/patrol":
+                import json as _json
+                qs = parse_qs(parsed.query)
+                action = qs.get("action", ["status"])[0]
+                if action == "start":
+                    result = _start_patrol(config)
+                elif action == "stop":
+                    result = _stop_patrol()
+                elif action == "config":
+                    # Save patrol config if data provided
+                    patrol_data = {}
+                    if "positions" in qs:
+                        try:
+                            patrol_data["positions"] = _json.loads(qs["positions"][0])
+                        except (ValueError, KeyError):
+                            pass
+                    if "repeat" in qs:
+                        patrol_data["repeat"] = qs["repeat"][0] == "true"
+                    if patrol_data:
+                        current = _get_patrol_config(config)
+                        current.update(patrol_data)
+                        _save_patrol_config(config, current)
+                    result = _get_patrol_config(config)
+                else:
+                    result = _get_patrol_status()
+                result_with_status = dict(_get_patrol_status())
+                if isinstance(result, dict) and "ok" in result:
+                    result_with_status.update(result)
+                elif action == "config":
+                    result_with_status["config"] = result
+                resp_data = _json.dumps(result_with_status)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(resp_data.encode())
+                return
+
             # Full A/V stream via ffmpeg (RTSP -> MPEG-TS, for VLC/ffplay)
             # VLC: vlc http://localhost:8088/api/stream
             if parsed.path == "/api/stream":
@@ -1318,14 +1498,17 @@ def open_viewer(config, open_browser=True):
                 self.send_header("Content-Type", "video/mp2t")
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
+                av_probe = "500000" if _rtsp_transport == "tcp" else "32768"
+                av_analyze = "500000" if _rtsp_transport == "tcp" else "0"
+                log.info("AV stream starting (transport=%s, client=%s)", _rtsp_transport, self.client_address[0])
                 try:
                     proc = subprocess.Popen(
                         ["ffmpeg",
                          "-fflags", "+nobuffer+flush_packets",
                          "-flags", "low_delay",
-                         "-probesize", "32",
-                         "-analyzeduration", "0",
-                         "-rtsp_transport", "udp",
+                         "-probesize", av_probe,
+                         "-analyzeduration", av_analyze,
+                         "-rtsp_transport", _rtsp_transport,
                          "-i", rtsp_url,
                          "-c:v", "copy",
                          "-c:a", "aac",
@@ -1336,7 +1519,7 @@ def open_viewer(config, open_browser=True):
                          "pipe:1"],
                         stdin=subprocess.DEVNULL,
                         stdout=subprocess.PIPE,
-                        stderr=subprocess.DEVNULL
+                        stderr=subprocess.PIPE
                     )
                     while True:
                         chunk = proc.stdout.read(4096)
@@ -1345,11 +1528,15 @@ def open_viewer(config, open_browser=True):
                         self.wfile.write(chunk)
                         self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError, OSError):
-                    pass
-                except Exception:
-                    pass
+                    log.info("AV stream disconnected")
+                except Exception as e:
+                    log.error("AV stream error: %s", e)
                 finally:
                     try:
+                        err = proc.stderr.read().decode(errors="replace").strip()
+                        if err:
+                            lines = [l for l in err.splitlines() if l.strip()][-5:]
+                            log.warning("AV stream ffmpeg stderr:\n  %s", "\n  ".join(lines))
                         proc.kill()
                     except Exception:
                         pass
@@ -1368,6 +1555,7 @@ def open_viewer(config, open_browser=True):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         _viewer_server = server
+        log.info("Server started on port %d", port)
         print(f"  Server started on port {port}")
     else:
         print(f"  Server already running on port {port}")
@@ -1405,47 +1593,17 @@ def update_credentials(config):
     save_config(config)
 
 
-# ---------------------------------------------------------------------------
-# Server control helpers
-# ---------------------------------------------------------------------------
-
-def _start_server(config):
-    """Start the proxy server if not already running."""
-    global _viewer_server
-    if _viewer_server is not None:
-        return True  # already running
-    open_viewer.__wrapped__(config)  # start server without opening browser
-    return _viewer_server is not None
-
-
 def _stop_server():
     global _viewer_server
     _stop_mjpeg_source()
     if _viewer_server:
         _viewer_server.shutdown()
         _viewer_server = None
+        log.info("Server stopped")
         print("  Server stopped.")
         return True
     print("  No server running.")
     return False
-
-
-def _ensure_server(config):
-    """Start server if needed, return True if running."""
-    global _viewer_server
-    if _viewer_server is not None:
-        return True
-    # Start server without browser
-    import http.server
-
-    generate_viewer(config)
-    cam = config["camera"]
-    cam_base = f"http://{cam['ip']}:{cam['port']}/cgi-bin/CGIProxy.fcgi"
-    port = 8088
-
-    # Re-use the ProxyHandler from open_viewer by calling it
-    open_viewer(config, open_browser=False)
-    return _viewer_server is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1482,6 +1640,8 @@ def main():
     global _viewer_server, _stream_quality
 
     print("=== NerdCam (Foscam R2) Setup Tool ===\n")
+    log.info("=== NerdCam starting ===")
+    print(f"  Log file: {LOG_PATH}")
 
     _check_dependencies()
     _detect_rec_codecs()
@@ -1532,6 +1692,9 @@ def main():
         elif choice == "5":
             _stop_server()
         elif choice == "q":
+            if _patrol_running:
+                print("  Stopping patrol...")
+                _stop_patrol()
             if _recording_proc and _recording_proc.poll() is None:
                 print("  Stopping recording...")
                 _stop_recording()
@@ -1651,7 +1814,7 @@ def _start_recording(config):
     rtsp_url = _rtsp_url(config)
     try:
         cmd = ["ffmpeg", "-y",
-               "-rtsp_transport", "udp",
+               "-rtsp_transport", _rtsp_transport,
                "-i", rtsp_url,
                *video_args,
                "-c:a", "aac", "-b:a", "128k",
@@ -1676,9 +1839,11 @@ def _start_recording(config):
             return False
         _recording_info = {"filename": filename, "started": time.time(),
                            "codec": _rec_codec, "compression": _rec_compression}
+        log.info("Recording started: %s (codec=%s, compression=%d)", filename, _rec_codec, _rec_compression)
         print(f"  Recording started: {filename} ({_rec_codec}, compression {_rec_compression})")
         return True
     except FileNotFoundError:
+        log.error("Recording failed: ffmpeg not found")
         print("  ERROR: ffmpeg not found.")
         return False
 
@@ -1699,6 +1864,7 @@ def _stop_recording():
     except Exception:
         _recording_proc.kill()
     elapsed = time.time() - _recording_info["started"]
+    log.info("Recording stopped: %s (%ds)", _recording_info['filename'], int(elapsed))
     print(f"  Recording stopped: {_recording_info['filename']} ({int(elapsed)}s)")
     _recording_proc = None
     _recording_info = None
@@ -1733,6 +1899,117 @@ def _cleanup_recording():
 
 
 atexit.register(_cleanup_recording)
+
+
+# ---------------------------------------------------------------------------
+# Patrol (automated PTZ position cycling)
+# ---------------------------------------------------------------------------
+
+_patrol_thread = None
+_patrol_running = False
+_patrol_status = {"running": False, "current_pos": "", "cycle": 0}
+_patrol_config = None  # reference to main config for saving
+
+
+def _patrol_loop(positions, repeat, config):
+    """Daemon thread: cycle through PTZ positions with dwell times."""
+    global _patrol_running, _patrol_status
+    cycle = 0
+    while _patrol_running:
+        cycle += 1
+        _patrol_status["cycle"] = cycle
+        for pos in positions:
+            if not _patrol_running:
+                break
+            name = pos["name"]
+            dwell = pos["dwell"]
+            if dwell <= 0:
+                continue
+            _patrol_status["current_pos"] = name
+            cgi("ptzGotoPresetPoint", config, name=name)
+            # Sleep in 100ms increments for fast stop response
+            elapsed = 0.0
+            while elapsed < dwell and _patrol_running:
+                time.sleep(0.1)
+                elapsed += 0.1
+        if not repeat:
+            break
+    _patrol_running = False
+    _patrol_status["running"] = False
+    _patrol_status["current_pos"] = ""
+
+
+def _start_patrol(config):
+    """Start patrol with config from settings."""
+    global _patrol_thread, _patrol_running, _patrol_status, _patrol_config
+    if _patrol_running:
+        return {"ok": False, "error": "Patrol already running"}
+    _patrol_config = config
+    settings = config.get("settings", {})
+    patrol_cfg = settings.get("patrol", {})
+    positions = patrol_cfg.get("positions", [])
+    repeat = patrol_cfg.get("repeat", True)
+    active = [p for p in positions if p.get("dwell", 0) > 0]
+    if len(active) < 2:
+        log.info("Patrol start rejected: only %d active positions", len(active))
+        return {"ok": False, "error": "Need at least 2 positions with dwell > 0"}
+    _patrol_running = True
+    _patrol_status = {"running": True, "current_pos": "", "cycle": 0}
+    _patrol_thread = threading.Thread(
+        target=_patrol_loop, args=(positions, repeat, config), daemon=True)
+    _patrol_thread.start()
+    log.info("Patrol started: %d positions, repeat=%s", len(active), repeat)
+    return {"ok": True}
+
+
+def _stop_patrol():
+    """Stop patrol loop."""
+    global _patrol_running
+    if not _patrol_running:
+        return {"ok": False, "error": "Patrol not running"}
+    _patrol_running = False
+    log.info("Patrol stopped")
+    return {"ok": True}
+
+
+def _get_patrol_status():
+    """Return current patrol state."""
+    return {
+        "running": _patrol_running,
+        "current_pos": _patrol_status.get("current_pos", ""),
+        "cycle": _patrol_status.get("cycle", 0),
+    }
+
+
+def _get_patrol_config(config):
+    """Return patrol config from settings."""
+    settings = config.get("settings", {})
+    return settings.get("patrol", {
+        "positions": [
+            {"name": "pos1", "dwell": 0},
+            {"name": "pos2", "dwell": 0},
+            {"name": "pos3", "dwell": 0},
+            {"name": "pos4", "dwell": 0},
+        ],
+        "repeat": True,
+    })
+
+
+def _save_patrol_config(config, patrol_cfg):
+    """Save patrol config into encrypted settings."""
+    if "settings" not in config:
+        config["settings"] = {}
+    config["settings"]["patrol"] = patrol_cfg
+    save_config(config)
+
+
+def _cleanup_patrol():
+    """Safety net: stop patrol thread on exit."""
+    global _patrol_running
+    _patrol_running = False
+
+
+atexit.register(_cleanup_patrol)
 
 
 def _recording_menu(config):
