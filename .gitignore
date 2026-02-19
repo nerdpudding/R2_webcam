@@ -10,6 +10,9 @@ nerdcam.html
 # Snapshots
 snapshot_*.jpg
 
+# Recordings
+recordings/
+
 # Python
 __pycache__/
 *.pyc

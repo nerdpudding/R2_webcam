@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Foscam R2 (NerdCam) setup and control tool.
+"""NerdCam - Foscam R2 local control, streaming, and recording tool.
 
 On first run, prompts for camera credentials and WiFi settings,
 then encrypts everything into config.enc with a master password.
-Run: python3 foscam_setup.py
+Run: python3 nerdcam.py
 """
 
+import atexit
 import base64
 import hashlib
 
@@ -21,6 +22,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import getpass
+import threading
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -29,6 +31,199 @@ CONFIG_PLAIN = os.path.join(SCRIPT_DIR, "config.json")
 
 _viewer_server = None
 _stream_quality = 7  # 1-10 scale: 10=best quality, 1=lowest. Maps to ffmpeg -q:v internally.
+_mic_gain = 3.0  # Audio volume multiplier for mic stream (1.0-5.0)
+
+# Shared MJPEG source: one ffmpeg process, multiple browser clients
+# Uses simple polling (no Condition/Lock) - CPython's GIL makes single
+# variable reads/writes atomic, and there's only one writer thread.
+_mjpeg_frame = None      # latest JPEG frame bytes (written by reader thread)
+_mjpeg_frame_id = 0      # incremented on each new frame (written by reader thread)
+_mjpeg_proc = None        # shared ffmpeg process
+_mjpeg_quality = None     # quality level when source was started
+
+
+def _start_mjpeg_source(cam):
+    """Start shared ffmpeg MJPEG source if not already running."""
+    global _mjpeg_proc, _mjpeg_frame, _mjpeg_frame_id, _mjpeg_quality
+    if _mjpeg_proc:
+        if _mjpeg_proc.poll() is None:
+            if _mjpeg_quality == _stream_quality:
+                return
+            _stop_mjpeg_source()
+        else:
+            try:
+                _mjpeg_proc.kill()
+            except Exception:
+                pass
+            _mjpeg_proc = None
+            time.sleep(0.5)
+
+    rtsp_port = cam.get("port", 88)
+    rtsp_url = (f"rtsp://{cam['username']}:{cam['password']}"
+                f"@{cam['ip']}:{rtsp_port}/videoMain")
+    _mjpeg_quality = _stream_quality
+    proc = subprocess.Popen(
+        ["ffmpeg",
+         "-fflags", "+nobuffer+flush_packets",
+         "-flags", "low_delay",
+         "-probesize", "32",
+         "-analyzeduration", "0",
+         "-rtsp_transport", "udp",
+         "-rtsp_flags", "prefer_tcp",
+         "-i", rtsp_url,
+         "-f", "mjpeg",
+         "-q:v", str(int(2 + (10 - _stream_quality) * 29 / 9)),
+         "-r", "25",
+         "-an",
+         "-threads", "1",
+         "-flush_packets", "1",
+         "pipe:1"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE
+    )
+    _mjpeg_proc = proc
+
+    def _mjpeg_reader(p):
+        """Read JPEG frames from ffmpeg stdout into shared buffer."""
+        global _mjpeg_frame, _mjpeg_frame_id
+        buf = b""
+        try:
+            while True:
+                chunk = p.stdout.read(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                while True:
+                    start = buf.find(b"\xff\xd8")
+                    end = buf.find(b"\xff\xd9", start + 2) if start >= 0 else -1
+                    if start < 0 or end < 0:
+                        break
+                    jpeg = buf[start:end + 2]
+                    buf = buf[end + 2:]
+                    _mjpeg_frame = jpeg
+                    _mjpeg_frame_id += 1
+        except Exception:
+            pass
+        if p.poll() and p.stderr:
+            try:
+                err = p.stderr.read().decode(errors="replace").strip()
+                if err:
+                    lines = err.splitlines()[-3:]
+                    print(f"  MJPEG source error: {' | '.join(lines)}")
+            except Exception:
+                pass
+
+    threading.Thread(target=_mjpeg_reader, args=(proc,), daemon=True).start()
+
+
+def _stop_mjpeg_source():
+    """Stop the shared MJPEG source."""
+    global _mjpeg_proc, _mjpeg_frame
+    if _mjpeg_proc:
+        try:
+            _mjpeg_proc.kill()
+        except Exception:
+            pass
+        _mjpeg_proc = None
+    _mjpeg_frame = None
+
+_recording_proc = None
+_recording_info = None  # {"filename": str, "started": float}
+_max_record_seconds = 3600
+_rec_codec = None       # codec key, set by _detect_rec_codecs()
+_rec_compression = 5    # 1-10: 1=best quality/largest, 10=max compression/smallest
+
+# Codec definitions: (key, encoder_name, description, required_ffmpeg_encoder)
+# encoder_name=None means -c:v copy (no re-encode, compression level ignored)
+_ALL_REC_CODECS = [
+    ("nvenc_av1",  "av1_nvenc",  "NVENC AV1 (GPU, best compression)", "av1_nvenc"),
+    ("nvenc_h265", "hevc_nvenc", "NVENC H.265 (GPU, recommended)",    "hevc_nvenc"),
+    ("nvenc_h264", "h264_nvenc", "NVENC H.264 (GPU, most compatible)","h264_nvenc"),
+    ("sw_h265",    "libx265",    "Software H.265 (CPU)",              "libx265"),
+    ("sw_h264",    "libx264",    "Software H.264 (CPU, compatible)",  "libx264"),
+    ("original",   None,         "Original (no re-encode)",           None),
+]
+
+REC_CODECS = {}  # populated by _detect_rec_codecs(): key -> (encoder_name, description)
+_DEFAULT_REC_CODEC = "original"
+
+# Quality ranges per encoder: maps compression 1-10 to CQ/CRF values
+# Low number = better quality / bigger files, high = more compression / smaller
+_QUALITY_RANGES = {
+    "av1_nvenc":  (22, 48),   # NVENC AV1: CQ 22 (studio) to 48 (tiny)
+    "hevc_nvenc": (18, 42),   # NVENC HEVC: CQ 18 to 42
+    "h264_nvenc": (16, 38),   # NVENC H.264: CQ 16 to 38
+    "libx265":    (18, 40),   # Software x265: CRF 18 to 40
+    "libx264":    (16, 38),   # Software x264: CRF 16 to 38
+}
+
+# Compression level labels (shown in UI)
+COMPRESSION_LABELS = {
+    1: "Studio (largest files)",
+    2: "Very high quality",
+    3: "High quality",
+    4: "Good quality",
+    5: "Balanced (default)",
+    6: "Moderate compression",
+    7: "Compact",
+    8: "Small files",
+    9: "Very small files",
+    10: "Maximum compression",
+}
+
+
+def _rec_video_args():
+    """Build ffmpeg video args from current codec + compression level."""
+    codec = REC_CODECS.get(_rec_codec)
+    if not codec or codec[0] is None:
+        return ["-c:v", "copy"]
+
+    encoder = codec[0]
+    lo, hi = _QUALITY_RANGES.get(encoder, (18, 42))
+    qval = int(lo + (_rec_compression - 1) * (hi - lo) / 9)
+
+    if encoder.endswith("_nvenc"):
+        return ["-c:v", encoder, "-cq", str(qval), "-preset", "p4"]
+    else:
+        return ["-c:v", encoder, "-crf", str(qval), "-preset", "fast"]
+
+
+def _detect_rec_codecs():
+    """Probe ffmpeg for available encoders. Called once at startup."""
+    global REC_CODECS, _DEFAULT_REC_CODEC
+    available = set()
+    try:
+        out = subprocess.run(["ffmpeg", "-encoders"],
+                             capture_output=True, text=True, timeout=5)
+        for line in out.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                available.add(parts[1])
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    REC_CODECS = {}
+    for key, encoder, desc, required in _ALL_REC_CODECS:
+        if required is None or required in available:
+            REC_CODECS[key] = (encoder, desc)
+
+    for pref in ["nvenc_h265", "nvenc_h264", "sw_h265", "sw_h264", "original"]:
+        if pref in REC_CODECS:
+            _DEFAULT_REC_CODEC = pref
+            break
+
+    if not REC_CODECS:
+        REC_CODECS["original"] = (None, "Original (no re-encode)")
+        _DEFAULT_REC_CODEC = "original"
+
+    gpu = sum(1 for k in REC_CODECS if k.startswith("nvenc_"))
+    sw = sum(1 for k in REC_CODECS if k.startswith("sw_"))
+    info = []
+    if gpu: info.append(f"{gpu} GPU")
+    if sw: info.append(f"{sw} software")
+    if "original" in REC_CODECS: info.append("passthrough")
+    print(f"  Recording codecs: {', '.join(info)} (default: {_DEFAULT_REC_CODEC})")
 
 # Master password for this session (set once at startup)
 _master_pwd = None
@@ -124,9 +319,14 @@ def _onboarding_scan_wifi(config):
 
 def _load_settings(config):
     """Restore app settings from config."""
-    global _stream_quality
+    global _stream_quality, _mic_gain, _rec_codec, _rec_compression
     settings = config.get("settings", {})
     _stream_quality = settings.get("stream_quality", 7)
+    _mic_gain = settings.get("mic_gain", 3.0)
+    rc = settings.get("rec_codec", _DEFAULT_REC_CODEC)
+    _rec_codec = rc if rc in REC_CODECS else _DEFAULT_REC_CODEC
+    comp = settings.get("rec_compression", 5)
+    _rec_compression = max(1, min(10, int(comp)))
 
 
 def _save_settings(config):
@@ -134,6 +334,9 @@ def _save_settings(config):
     if "settings" not in config:
         config["settings"] = {}
     config["settings"]["stream_quality"] = _stream_quality
+    config["settings"]["mic_gain"] = _mic_gain
+    config["settings"]["rec_codec"] = _rec_codec
+    config["settings"]["rec_compression"] = _rec_compression
     save_config(config)
 
 
@@ -376,6 +579,40 @@ def reboot_camera(config):
     data = cgi("rebootSystem", config)
     ok(data, "rebootSystem")
     print("  Camera is rebooting. Wait ~60 seconds.")
+
+
+def sync_time(config):
+    """Sync camera time from this computer's clock."""
+    import datetime as _dt
+    import time as _time
+
+    print("\n--- Sync Time ---")
+    now = _dt.datetime.now()
+    utc_offset = int(now.astimezone().utcoffset().total_seconds())
+    sign = "+" if utc_offset >= 0 else ""
+    print(f"  PC time: {now.strftime('%Y-%m-%d %H:%M:%S')} (UTC{sign}{utc_offset // 3600})")
+
+    data = cgi("setSystemTime", config,
+               timeSource="1",
+               ntpServer="",
+               dateFormat="0",
+               timeFormat="1",
+               timeZone=str(utc_offset),
+               isDst="0",
+               dst="0",
+               year=str(now.year),
+               mon=str(now.month),
+               day=str(now.day),
+               hour=str(now.hour),
+               minute=str(now.minute),
+               sec=str(now.second))
+    if ok(data, "setSystemTime"):
+        print("  Camera time synced.")
+    # Verify
+    data = cgi("getSystemTime", config)
+    if data:
+        print(f"  Camera reports: {data.get('year')}-{data.get('mon')}-{data.get('day')} "
+              f"{data.get('hour')}:{data.get('minute')}:{data.get('sec')}")
 
 
 # ---------------------------------------------------------------------------
@@ -829,7 +1066,6 @@ def generate_viewer(config):
 def open_viewer(config, open_browser=True):
     """Start proxy server (and optionally open web viewer in browser)."""
     import http.server
-    import threading
     from urllib.parse import urlparse, parse_qs
 
     cam = config["camera"]
@@ -845,6 +1081,7 @@ def open_viewer(config, open_browser=True):
             pass
 
         def do_GET(self):
+            global _mic_gain, _rec_codec, _rec_compression
             parsed = urlparse(self.path)
 
             # Proxy: /api/cam?cmd=XXX&param=val -> camera CGI
@@ -887,15 +1124,51 @@ def open_viewer(config, open_browser=True):
                     self.end_headers()
                 return
 
-            # MJPEG stream via ffmpeg (RTSP -> MJPEG conversion)
+            # MJPEG stream (shared source: one ffmpeg, multiple clients)
             # OpenCV can read this: cv2.VideoCapture("http://localhost:8088/api/mjpeg")
             if parsed.path == "/api/mjpeg":
+                self.connection.settimeout(30)
+                _start_mjpeg_source(cam)
+                self.send_response(200)
+                self.send_header("Content-Type",
+                                 "multipart/x-mixed-replace; boundary=ffmpeg")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                try:
+                    last_id = 0
+                    no_frame_count = 0
+                    while True:
+                        fid = _mjpeg_frame_id
+                        frame = _mjpeg_frame
+                        if fid > last_id and frame is not None:
+                            no_frame_count = 0
+                            last_id = fid
+                            self.wfile.write(b"--ffmpeg\r\n")
+                            self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                            self.wfile.write(
+                                f"Content-Length: {len(frame)}\r\n".encode())
+                            self.wfile.write(b"\r\n")
+                            self.wfile.write(frame)
+                            self.wfile.write(b"\r\n")
+                            self.wfile.flush()
+                        else:
+                            time.sleep(0.02)
+                            no_frame_count += 1
+                            if no_frame_count >= 250:  # ~5s no frames
+                                _start_mjpeg_source(cam)
+                                no_frame_count = 0
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+                return
+
+            # Audio-only stream via ffmpeg (RTSP -> MP3, for browser <audio>)
+            if parsed.path == "/api/audio":
+                self.connection.settimeout(30)
                 rtsp_port = cam.get("port", 88)
                 rtsp_url = (f"rtsp://{cam['username']}:{cam['password']}"
                             f"@{cam['ip']}:{rtsp_port}/videoMain")
                 self.send_response(200)
-                self.send_header("Content-Type",
-                                 "multipart/x-mixed-replace; boundary=ffmpeg")
+                self.send_header("Content-Type", "audio/mpeg")
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
                 try:
@@ -906,42 +1179,25 @@ def open_viewer(config, open_browser=True):
                          "-probesize", "32",
                          "-analyzeduration", "0",
                          "-rtsp_transport", "udp",
-                         "-rtsp_flags", "prefer_tcp",
                          "-i", rtsp_url,
-                         "-f", "mjpeg",
-                         "-q:v", str(int(2 + (10 - _stream_quality) * 29 / 9)),
-                         "-r", "25",
-                         "-an",
-                         "-threads", "1",
+                         "-vn",
+                         "-af", f"volume={_mic_gain}",
+                         "-c:a", "libmp3lame",
+                         "-b:a", "128k",
+                         "-f", "mp3",
                          "-flush_packets", "1",
                          "pipe:1"],
                         stdin=subprocess.DEVNULL,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.DEVNULL
                     )
-                    # Read JPEG frames from ffmpeg stdout and wrap in MJPEG
-                    buf = b""
                     while True:
                         chunk = proc.stdout.read(4096)
                         if not chunk:
                             break
-                        buf += chunk
-                        # Find JPEG boundaries (FFD8 = start, FFD9 = end)
-                        while True:
-                            start = buf.find(b"\xff\xd8")
-                            end = buf.find(b"\xff\xd9", start + 2) if start >= 0 else -1
-                            if start < 0 or end < 0:
-                                break
-                            jpeg = buf[start:end + 2]
-                            buf = buf[end + 2:]
-                            self.wfile.write(b"--ffmpeg\r\n")
-                            self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                            self.wfile.write(f"Content-Length: {len(jpeg)}\r\n".encode())
-                            self.wfile.write(b"\r\n")
-                            self.wfile.write(jpeg)
-                            self.wfile.write(b"\r\n")
-                            self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
                     pass
                 except Exception:
                     pass
@@ -952,9 +1208,72 @@ def open_viewer(config, open_browser=True):
                         pass
                 return
 
+            # Settings endpoint (GET returns JSON, GET with params updates)
+            if parsed.path == "/api/settings":
+                qs = parse_qs(parsed.query)
+                changed = False
+                if "mic_gain" in qs:
+                    try:
+                        val = float(qs["mic_gain"][0])
+                        if 1.0 <= val <= 5.0:
+                            _mic_gain = round(val, 1)
+                            changed = True
+                    except (ValueError, IndexError):
+                        pass
+                if "rec_codec" in qs:
+                    val = qs["rec_codec"][0]
+                    if val in REC_CODECS:
+                        _rec_codec = val
+                        changed = True
+                if "rec_compression" in qs:
+                    try:
+                        val = int(qs["rec_compression"][0])
+                        if 1 <= val <= 10:
+                            _rec_compression = val
+                            changed = True
+                    except (ValueError, IndexError):
+                        pass
+                if changed:
+                    _save_settings(config)
+                import json as _json
+                codecs_info = {k: {"desc": v[1]}
+                               for k, v in REC_CODECS.items()}
+                resp_data = _json.dumps({
+                    "mic_gain": _mic_gain,
+                    "stream_quality": _stream_quality,
+                    "rec_codec": _rec_codec,
+                    "rec_compression": _rec_compression,
+                    "rec_codecs": codecs_info,
+                })
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(resp_data.encode())
+                return
+
+            # Recording endpoint (start/stop/status)
+            if parsed.path == "/api/record":
+                import json as _json
+                qs = parse_qs(parsed.query)
+                action = qs.get("action", ["status"])[0]
+                if action == "start":
+                    _start_recording(config)
+                elif action == "stop":
+                    _stop_recording()
+                status = _recording_status()
+                resp_data = _json.dumps(status)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(resp_data.encode())
+                return
+
             # Full A/V stream via ffmpeg (RTSP -> MPEG-TS, for VLC/ffplay)
             # VLC: vlc http://localhost:8088/api/stream
             if parsed.path == "/api/stream":
+                self.connection.settimeout(30)
                 rtsp_port = cam.get("port", 88)
                 rtsp_url = (f"rtsp://{cam['username']}:{cam['password']}"
                             f"@{cam['ip']}:{rtsp_port}/videoMain")
@@ -988,7 +1307,7 @@ def open_viewer(config, open_browser=True):
                             break
                         self.wfile.write(chunk)
                         self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, OSError):
                     pass
                 except Exception:
                     pass
@@ -1064,6 +1383,7 @@ def _start_server(config):
 
 def _stop_server():
     global _viewer_server
+    _stop_mjpeg_source()
     if _viewer_server:
         _viewer_server.shutdown()
         _viewer_server = None
@@ -1080,7 +1400,6 @@ def _ensure_server(config):
         return True
     # Start server without browser
     import http.server
-    import threading
 
     generate_viewer(config)
     cam = config["camera"]
@@ -1096,10 +1415,39 @@ def _ensure_server(config):
 # Main menu
 # ---------------------------------------------------------------------------
 
+def _check_dependencies():
+    """Check system dependencies and warn about missing ones."""
+    missing = []
+
+    # ffmpeg (required for streaming, recording, codec detection)
+    try:
+        result = subprocess.run(["ffmpeg", "-version"],
+                                capture_output=True, text=True, timeout=5)
+        ver = result.stdout.split("\n")[0] if result.stdout else "unknown version"
+        print(f"  ffmpeg: {ver.split(',')[0]}")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        missing.append("ffmpeg")
+        print("  ffmpeg: NOT FOUND (required for streaming and recording)")
+        print("    Install: sudo apt install ffmpeg")
+
+    # xdg-open (nice-to-have for opening browser)
+    try:
+        subprocess.run(["which", "xdg-open"], capture_output=True, timeout=3)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        print("  xdg-open: not found (browser auto-open disabled)")
+
+    if missing:
+        print(f"\n  WARNING: Missing required dependencies: {', '.join(missing)}")
+        print("  Some features will not work.\n")
+
+
 def main():
     global _viewer_server, _stream_quality
 
     print("=== NerdCam (Foscam R2) Setup Tool ===\n")
+
+    _check_dependencies()
+    _detect_rec_codecs()
 
     config = load_config()
     cam = config["camera"]
@@ -1147,6 +1495,9 @@ def main():
         elif choice == "5":
             _stop_server()
         elif choice == "q":
+            if _recording_proc and _recording_proc.poll() is None:
+                print("  Stopping recording...")
+                _stop_recording()
             _stop_server() if _viewer_server else None
             break
         else:
@@ -1182,8 +1533,15 @@ def _advanced_menu(config):
         print("    w. WiFi status")
         print("    n. Configure WiFi")
         print("    p. Port info")
+        print("  AUDIO")
+        print("    m. Mic gain")
+        print("  OVERLAY")
+        print("    o. OSD (timestamp / camera name)")
+        print("  RECORDING")
+        print("    e. Local recording (start/stop)")
         print("  SYSTEM")
         print("    i. Device info")
+        print("    t. Sync time from PC")
         print("    r. Reboot camera")
         print("    x. Raw CGI command")
         print("    c. Update credentials")
@@ -1218,16 +1576,256 @@ def _advanced_menu(config):
             show_ports(config)
         elif choice == "i":
             show_device_info(config)
+        elif choice == "t":
+            sync_time(config)
         elif choice == "r":
             reboot_camera(config)
         elif choice == "x":
             raw_command(config)
+        elif choice == "m":
+            _mic_gain_menu(config)
+        elif choice == "o":
+            osd_menu(config)
+        elif choice == "e":
+            _recording_menu(config)
         elif choice == "c":
             update_credentials(config)
         elif choice == "b":
             break
         else:
             print("  Unknown choice")
+
+
+def _start_recording(config):
+    """Start recording RTSP stream to local MP4 file."""
+    import datetime as _dt
+    global _recording_proc, _recording_info
+    if _recording_proc and _recording_proc.poll() is None:
+        print("  Already recording!")
+        return False
+
+    rec_dir = os.path.join(SCRIPT_DIR, "recordings")
+    os.makedirs(rec_dir, exist_ok=True)
+    filename = f"nerdcam_{_dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+    filepath = os.path.join(rec_dir, filename)
+
+    video_args = _rec_video_args()
+
+    rtsp_url = _rtsp_url(config)
+    try:
+        cmd = ["ffmpeg", "-y",
+               "-rtsp_transport", "udp",
+               "-i", rtsp_url,
+               *video_args,
+               "-c:a", "aac", "-b:a", "128k",
+               "-t", str(_max_record_seconds),
+               filepath]
+        _recording_proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE
+        )
+        # Check if ffmpeg crashed immediately (bad codec, bad input, etc.)
+        time.sleep(1.5)
+        if _recording_proc.poll() is not None:
+            err = _recording_proc.stderr.read().decode(errors="replace")
+            # Show last few lines of ffmpeg error
+            err_lines = [l for l in err.strip().splitlines() if l.strip()]
+            err_tail = "\n    ".join(err_lines[-5:]) if err_lines else "unknown error"
+            print(f"  ERROR: ffmpeg exited immediately:\n    {err_tail}")
+            _recording_proc = None
+            _recording_info = None
+            return False
+        _recording_info = {"filename": filename, "started": time.time(),
+                           "codec": _rec_codec, "compression": _rec_compression}
+        print(f"  Recording started: {filename} ({_rec_codec}, compression {_rec_compression})")
+        return True
+    except FileNotFoundError:
+        print("  ERROR: ffmpeg not found.")
+        return False
+
+
+def _stop_recording():
+    """Stop recording by sending 'q' to ffmpeg for clean MP4 finalization."""
+    global _recording_proc, _recording_info
+    if not _recording_proc or _recording_proc.poll() is not None:
+        _recording_proc = None
+        _recording_info = None
+        print("  Not recording.")
+        return False
+
+    try:
+        _recording_proc.stdin.write(b"q")
+        _recording_proc.stdin.flush()
+        _recording_proc.wait(timeout=10)
+    except Exception:
+        _recording_proc.kill()
+    elapsed = time.time() - _recording_info["started"]
+    print(f"  Recording stopped: {_recording_info['filename']} ({int(elapsed)}s)")
+    _recording_proc = None
+    _recording_info = None
+    return True
+
+
+def _recording_status():
+    """Return current recording state as dict."""
+    if _recording_proc and _recording_proc.poll() is None and _recording_info:
+        elapsed = time.time() - _recording_info["started"]
+        return {
+            "recording": True,
+            "filename": _recording_info["filename"],
+            "elapsed": int(elapsed)
+        }
+    return {"recording": False, "filename": "", "elapsed": 0}
+
+
+def _cleanup_recording():
+    """Safety net: kill orphaned ffmpeg recording process."""
+    global _recording_proc
+    if _recording_proc and _recording_proc.poll() is None:
+        try:
+            _recording_proc.stdin.write(b"q")
+            _recording_proc.stdin.flush()
+            _recording_proc.wait(timeout=5)
+        except Exception:
+            try:
+                _recording_proc.kill()
+            except Exception:
+                pass
+
+
+atexit.register(_cleanup_recording)
+
+
+def _recording_menu(config):
+    """CLI menu for local recording."""
+    global _rec_codec, _rec_compression
+    print("\n--- Local Recording ---")
+    rec_dir = os.path.join(SCRIPT_DIR, "recordings")
+    print(f"  Save location: {rec_dir}")
+    status = _recording_status()
+    if status["recording"]:
+        print(f"  Currently recording: {status['filename']} ({status['elapsed']}s)")
+    else:
+        print("  Not recording.")
+    codec_desc = REC_CODECS[_rec_codec][1]
+    comp_label = COMPRESSION_LABELS.get(_rec_compression, "")
+    print(f"  Codec: {_rec_codec} - {codec_desc}")
+    print(f"  Compression: {_rec_compression}/10 - {comp_label}")
+    print("\n  Options:")
+    print("  s=start  x=stop  c=change codec  l=compression level  q=back")
+
+    while True:
+        choice = input("  Rec> ").strip().lower()
+        if choice == "q":
+            break
+        elif choice == "s":
+            _start_recording(config)
+        elif choice == "x":
+            _stop_recording()
+        elif choice == "c":
+            print("\n  Available codecs:")
+            for key, (_, desc) in REC_CODECS.items():
+                marker = " *" if key == _rec_codec else ""
+                print(f"    {key:14s} - {desc}{marker}")
+            val = input(f"\n  Codec [{_rec_codec}]: ").strip()
+            if not val:
+                print("  Unchanged")
+            elif val in REC_CODECS:
+                _rec_codec = val
+                _save_settings(config)
+                print(f"  Set to: {val}")
+            else:
+                print("  Unknown codec")
+        elif choice == "l":
+            print("\n  Compression level (1-10):")
+            for lvl, label in COMPRESSION_LABELS.items():
+                marker = " *" if lvl == _rec_compression else ""
+                print(f"    {lvl:2d} = {label}{marker}")
+            val = input(f"\n  Level [{_rec_compression}]: ").strip()
+            if not val:
+                print("  Unchanged")
+            else:
+                try:
+                    val = int(val)
+                    if 1 <= val <= 10:
+                        _rec_compression = val
+                        _save_settings(config)
+                        print(f"  Set to: {val} - {COMPRESSION_LABELS[val]}")
+                    else:
+                        print("  Must be 1-10")
+                except ValueError:
+                    print("  Invalid number")
+        else:
+            print("  Unknown option")
+
+
+def osd_menu(config):
+    """Toggle OSD overlays (timestamp, device name) on camera stream."""
+    print("\n--- OSD Overlay ---")
+    data = cgi("getOSDSetting", config)
+    if not ok(data, "getOSDSetting"):
+        return
+
+    ts_on = data.get("isEnableTimeStamp", "0") == "1"
+    dn_on = data.get("isEnableDevName", "0") == "1"
+    print(f"  Timestamp: {'ON' if ts_on else 'OFF'}")
+    print(f"  Device name: {'ON' if dn_on else 'OFF'}")
+
+    print("\n  Options:")
+    print("  t=toggle timestamp  d=toggle device name  n=set device name")
+    print("  q=back")
+
+    while True:
+        choice = input("  OSD> ").strip().lower()
+        if choice == "q":
+            break
+        elif choice == "t":
+            new_val = "0" if ts_on else "1"
+            data = cgi("setOSDSetting", config, isEnableTimeStamp=new_val,
+                        isEnableDevName="1" if dn_on else "0")
+            if ok(data, "setOSDSetting"):
+                ts_on = not ts_on
+                print(f"  Timestamp: {'ON' if ts_on else 'OFF'}")
+        elif choice == "d":
+            new_val = "0" if dn_on else "1"
+            data = cgi("setOSDSetting", config, isEnableDevName=new_val,
+                        isEnableTimeStamp="1" if ts_on else "0")
+            if ok(data, "setOSDSetting"):
+                dn_on = not dn_on
+                print(f"  Device name: {'ON' if dn_on else 'OFF'}")
+        elif choice == "n":
+            name = input("  New device name: ").strip()
+            if name:
+                data = cgi("setDevName", config, devName=name)
+                ok(data, f"setDevName({name})")
+        else:
+            print("  Unknown option")
+
+
+def _mic_gain_menu(config):
+    """Set microphone gain for audio stream."""
+    global _mic_gain
+    print(f"\n--- Mic Gain ---")
+    print(f"  Current: {_mic_gain}x")
+    print("  Range: 1.0 (quiet) to 5.0 (loud)")
+    val = input(f"  New gain [{_mic_gain}]: ").strip()
+    if not val:
+        print("  Unchanged")
+        return
+    try:
+        val = float(val)
+        if 1.0 <= val <= 5.0:
+            _mic_gain = round(val, 1)
+            _save_settings(config)
+            print(f"  Set to {_mic_gain}x")
+            if _viewer_server:
+                print("  NOTE: Restart audio stream for new gain to take effect.")
+        else:
+            print("  Must be 1.0-5.0")
+    except ValueError:
+        print("  Invalid number")
 
 
 _compression_config = None  # set by _advanced_menu

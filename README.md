@@ -21,18 +21,28 @@ Built as a replacement for the official Foscam Android/PC apps which are outdate
 
 ## Requirements
 
+**Required:**
 - **Python 3.6+** (uses only the standard library, no pip packages needed)
-- **ffmpeg** (for MJPEG/MPEG-TS stream transcoding via the proxy server)
+- **ffmpeg** (for streaming, audio, recording, codec detection)
 - A **Foscam R2** camera connected to your local network
 
-Optional:
-- **OpenCV** (`cv2`) for the RTSP test function
-- **VLC** or **ffplay** for direct stream playback
+```bash
+# Install ffmpeg on Debian/Ubuntu
+sudo apt install ffmpeg
+```
+
+**Optional:**
+- **NVIDIA GPU + drivers** for hardware-accelerated recording (NVENC H.264/H.265/AV1). Without a GPU, software encoding (libx264/libx265) is used automatically.
+- **OpenCV** (`pip install opencv-python`) for the RTSP test function (CLI only)
+- **VLC** or **ffplay** for direct stream playback (CLI only)
+- **xdg-open** for auto-opening the browser (present on most Linux desktops)
+
+The app checks for dependencies at startup and warns about anything missing.
 
 ## Quick Start
 
 ```bash
-python3 foscam_setup.py
+python3 nerdcam.py
 ```
 
 That's it. On first run you'll be guided through setup. On subsequent runs, just enter your master password.
@@ -94,6 +104,26 @@ The advanced menu gives access to all camera features:
 | **9** | Test RTSP (OpenCV) | Attempts to capture a single frame via OpenCV to verify the RTSP connection works |
 | **0** | Snapshot | Saves a JPEG snapshot from the camera to disk |
 
+### Audio
+
+| Option | Feature | What it does |
+|--------|---------|-------------|
+| **m** | Mic gain | Set audio volume multiplier (1.0-5.0x) for the microphone stream. Saved between sessions |
+
+### Overlay
+
+| Option | Feature | What it does |
+|--------|---------|-------------|
+| **o** | OSD overlay | Toggle timestamp and camera name overlay on the video stream. Set the device name |
+
+### Recording
+
+| Option | Feature | What it does |
+|--------|---------|-------------|
+| **e** | Local recording | Start/stop recording the camera stream to MP4 files in `recordings/`. Choose quality preset (NVENC GPU or software encoding). Auto-detects available encoders |
+
+Recording quality presets are detected at startup based on your hardware. With an NVIDIA GPU, hardware encoding (NVENC) is used for minimal CPU impact. Without a GPU, software encoding (x264/x265) is offered. Files are saved to the `recordings/` directory.
+
 ### Network
 
 | Option | Feature | What it does |
@@ -107,6 +137,7 @@ The advanced menu gives access to all camera features:
 | Option | Feature | What it does |
 |--------|---------|-------------|
 | **i** | Device info | Shows device name, firmware version, hardware version |
+| **t** | Sync time | Sync the camera's clock from your PC |
 | **r** | Reboot camera | Reboots the camera (takes ~60 seconds to come back) |
 | **x** | Raw CGI command | Send any CGI command directly to the camera. Useful for exploring the API |
 | **c** | Update credentials | Change camera IP, username, password, WiFi SSID, or WiFi password. Automatically re-encrypted |
@@ -115,13 +146,17 @@ The advanced menu gives access to all camera features:
 
 Option **1** from the main menu opens a web-based control panel in your browser with:
 
-- **Live stream** - MJPEG video feed from the camera
+- **Live stream** - MJPEG video feed with proper state tracking (CONNECTING / LIVE / RECONNECTING / STOPPED)
 - **Pan/Tilt controls** - Arrow buttons to move the camera, configurable PTZ duration and speed, preset positions
 - **Infrared toggle** - Auto, force on, force off
 - **Image adjustments** - Brightness, contrast, saturation, sharpness sliders, mirror/flip
 - **Video settings** - Resolution, framerate, bitrate controls
-- **Motion detection** - Enable/disable with sensitivity setting
-- **Device info** - Device details, WiFi status, port config, system time
+- **Audio** - Enable/disable mic with adjustable gain (1.0-5.0x), auto-restarts stream on gain change
+- **OSD overlay** - Toggle timestamp and camera name overlay, set device name
+- **Recording** - Start/stop local recording with selectable quality preset (auto-detected from available encoders)
+- **Motion detection** - Enable/disable with sensitivity setting (detection only, events not captured)
+- **Camera speaker** - Volume control for the camera's built-in speaker
+- **Device info** - Device details, WiFi status, port config, time sync
 
 The viewer runs on `http://localhost:8088` and communicates with the camera through the proxy server, so your camera credentials never leave your machine.
 
@@ -133,7 +168,10 @@ When the server is running (options 1 or 2), these local URLs are available:
 |-----|--------|----------|
 | `http://localhost:8088/api/mjpeg` | MJPEG (video only) | Browsers, OpenCV, other apps that consume MJPEG |
 | `http://localhost:8088/api/stream` | MPEG-TS (video + audio) | VLC, ffplay, media players |
+| `http://localhost:8088/api/audio` | MP3 (audio only) | Browser audio playback |
 | `http://localhost:8088/api/snap` | Single JPEG | Quick snapshot from any HTTP client |
+| `http://localhost:8088/api/settings` | JSON | Read/write app settings (mic gain, recording quality) |
+| `http://localhost:8088/api/record?action=X` | JSON | Start/stop/status for local recording |
 | `http://localhost:8088/api/cam?cmd=X` | XML | Proxy for camera CGI commands (credentials added server-side) |
 
 These URLs require **no credentials** - the proxy adds them server-side. Any application on your machine can use them.
@@ -182,7 +220,7 @@ If you lose access to the camera (forgotten password, bad WiFi config, etc.):
    - Use a network scanner like [Angry IP Scanner](https://angryip.org/) or `nmap -sn 192.168.1.0/24` to find devices on your network
    - Try the Foscam default: `192.168.1.88` (sometimes works, depends on your network)
 
-4. **Run NerdCam again** - Delete your old `config.enc` and run `python3 foscam_setup.py`. The onboarding will walk you through entering the new IP, the default `admin` username, and setting everything up again.
+4. **Run NerdCam again** - Delete your old `config.enc` and run `python3 nerdcam.py`. The onboarding will walk you through entering the new IP, the default `admin` username, and setting everything up again.
 
 ### Recommended: Give the Camera a Static IP
 
@@ -194,7 +232,8 @@ To avoid the camera's IP changing after a reboot or power loss, configure a **DH
 
 | File | Purpose |
 |------|---------|
-| `foscam_setup.py` | Main application (Python 3 + ffmpeg) |
+| `nerdcam.py` | Main application (Python 3 + ffmpeg) |
 | `nerdcam_template.html` | HTML/JS template for the web viewer |
 | `config.example.json` | Example config structure (copy to `config.json` to pre-fill defaults, or just run the app) |
-| `.gitignore` | Excludes credentials and generated files from version control |
+| `recordings/` | Local recording output directory (created automatically, git-ignored) |
+| `.gitignore` | Excludes credentials, generated files, and recordings from version control |
