@@ -34,7 +34,7 @@ body {
     flex: 1; display: flex; align-items: center;
     justify-content: center; background: #000;
 }
-#viewer img { max-width: 100%; max-height: 100%; object-fit: contain; }
+#viewer img, #viewer video { max-width: 100%; max-height: 100%; object-fit: contain; }
 #sidebar {
     width: 280px; background: #16213e; padding: 12px;
     display: flex; flex-direction: column; gap: 8px;
@@ -184,6 +184,208 @@ function ptzHome() {
 var _streamTimer = null;
 var _streaming = false;
 
+// --- MSE (MediaSource Extensions) engine ---
+var _mseActive = false;
+var _mseSource = null;
+var _mseBuffer = null;
+var _mseReader = null;
+var _mseQueue = [];
+var _mseReconnTimer = null;
+var _mseAbortCtrl = null;
+var _mseLagTimer = null;
+
+// Codec strings to try (camera sends H.264 High profile 1080p + AAC)
+var _mseCodecs = [
+    'video/mp4; codecs="avc1.640028, mp4a.40.2"',  // High L4.0 + AAC-LC
+    'video/mp4; codecs="avc1.4D4028, mp4a.40.2"',  // Main L4.0 + AAC-LC
+    'video/mp4; codecs="avc1.42E028, mp4a.40.2"',  // Baseline L4.0 + AAC-LC
+    'video/mp4; codecs="avc1.640028"',               // High L4.0 video only
+    'video/mp4; codecs="avc1.4D4028"'                // Main L4.0 video only
+];
+
+function _mseSupported() {
+    if (typeof MediaSource === "undefined") return false;
+    for (var i = 0; i < _mseCodecs.length; i++) {
+        if (MediaSource.isTypeSupported(_mseCodecs[i])) return true;
+    }
+    return false;
+}
+
+function _mseFindCodec() {
+    for (var i = 0; i < _mseCodecs.length; i++) {
+        if (MediaSource.isTypeSupported(_mseCodecs[i])) return _mseCodecs[i];
+    }
+    return null;
+}
+
+function _mseStart() {
+    var video = document.getElementById("camVideo");
+    var img = document.getElementById("camImage");
+    var s = document.getElementById("statusText");
+
+    _mseSource = new MediaSource();
+    video.src = URL.createObjectURL(_mseSource);
+    video.style.display = "";
+    img.style.display = "none";
+    _mseActive = true;
+
+    _mseSource.addEventListener("sourceopen", function() {
+        var codec = _mseFindCodec();
+        if (!codec) { _mseFallback("No supported codec"); return; }
+        try {
+            _mseBuffer = _mseSource.addSourceBuffer(codec);
+        } catch (e) {
+            _mseFallback("SourceBuffer error: " + e.message);
+            return;
+        }
+        _mseBuffer.mode = "segments";
+        _mseBuffer.addEventListener("updateend", _mseProcessQueue);
+        _mseBuffer.addEventListener("error", function() {
+            log("MSE buffer error");
+            _mseReconnect();
+        });
+        log("MSE started (" + codec.split('"')[1] + ")");
+        // Start lag checker: gentle periodic catchup
+        if (_mseLagTimer) clearInterval(_mseLagTimer);
+        _mseLagTimer = setInterval(_mseChaseLive, 3000);
+        _mseFetch();
+    });
+}
+
+function _mseFetch() {
+    var s = document.getElementById("statusText");
+    s.textContent = "CONNECTING..."; s.className = "stopped";
+
+    _mseAbortCtrl = new AbortController();
+    fetch("/api/fmp4?t=" + Date.now(), { signal: _mseAbortCtrl.signal })
+        .then(function(resp) {
+            if (!resp.ok || !resp.body) { _mseReconnect(); return; }
+            s.textContent = "LIVE"; s.className = "live";
+            _mseReader = resp.body.getReader();
+            _mseReadChunk();
+        })
+        .catch(function(e) {
+            if (e.name !== "AbortError") {
+                log("MSE fetch error: " + e.message);
+                _mseReconnect();
+            }
+        });
+}
+
+function _mseReadChunk() {
+    if (!_mseReader || !_mseActive) return;
+    _mseReader.read().then(function(result) {
+        if (result.done) {
+            log("MSE stream ended");
+            _mseReconnect();
+            return;
+        }
+        _mseQueue.push(result.value);
+        _mseProcessQueue();
+        _mseReadChunk();
+    }).catch(function(e) {
+        if (e.name !== "AbortError" && _mseActive) {
+            log("MSE read error: " + e.message);
+            _mseReconnect();
+        }
+    });
+}
+
+function _mseProcessQueue() {
+    if (!_mseBuffer || _mseBuffer.updating || _mseQueue.length === 0) return;
+    if (_mseSource.readyState !== "open") return;
+    var chunk = _mseQueue.shift();
+    try {
+        _mseBuffer.appendBuffer(chunk);
+    } catch (e) {
+        log("MSE append error: " + e.message);
+        _mseQueue = [];
+        _mseReconnect();
+        return;
+    }
+    // Trim buffer: keep last 10 seconds
+    try {
+        var video = document.getElementById("camVideo");
+        if (_mseBuffer.buffered.length > 0 && video.currentTime > 12) {
+            _mseBuffer.remove(0, video.currentTime - 10);
+        }
+    } catch (e) { /* ignore trim errors */ }
+}
+
+function _mseChaseLive() {
+    if (!_mseActive || !_mseBuffer) return;
+    var video = document.getElementById("camVideo");
+    if (_mseBuffer.buffered.length === 0) return;
+    var end = _mseBuffer.buffered.end(_mseBuffer.buffered.length - 1);
+    var lag = end - video.currentTime;
+    if (lag > 3) {
+        // Too far behind: jump to near live edge
+        video.currentTime = end - 0.5;
+        log("MSE: jumped to live (" + lag.toFixed(1) + "s behind)");
+    } else if (lag > 1.5) {
+        // Slightly behind: speed up playback to catch up
+        video.playbackRate = 1.05;
+    } else {
+        video.playbackRate = 1.0;
+    }
+}
+
+function _mseReconnect() {
+    if (_mseReconnTimer) return; // already scheduled
+    if (!_mseActive) return;
+    var s = document.getElementById("statusText");
+    s.textContent = "RECONNECTING..."; s.className = "stopped";
+    log("MSE reconnecting in 3s...");
+
+    // Clean up current fetch/reader
+    if (_mseAbortCtrl) { try { _mseAbortCtrl.abort(); } catch(e){} _mseAbortCtrl = null; }
+    _mseReader = null;
+    _mseQueue = [];
+
+    _mseReconnTimer = setTimeout(function() {
+        _mseReconnTimer = null;
+        if (!_mseActive) return;
+        // Reset MediaSource for clean reconnect
+        _mseCleanup();
+        _mseStart();
+    }, 3000);
+}
+
+function _mseCleanup() {
+    if (_mseLagTimer) { clearInterval(_mseLagTimer); _mseLagTimer = null; }
+    if (_mseReconnTimer) { clearTimeout(_mseReconnTimer); _mseReconnTimer = null; }
+    if (_mseAbortCtrl) { try { _mseAbortCtrl.abort(); } catch(e){} _mseAbortCtrl = null; }
+    _mseReader = null;
+    _mseQueue = [];
+    if (_mseBuffer && _mseSource && _mseSource.readyState === "open") {
+        try { _mseSource.removeSourceBuffer(_mseBuffer); } catch(e){}
+    }
+    _mseBuffer = null;
+    if (_mseSource && _mseSource.readyState === "open") {
+        try { _mseSource.endOfStream(); } catch(e){}
+    }
+    _mseSource = null;
+    var video = document.getElementById("camVideo");
+    if (video.src) { URL.revokeObjectURL(video.src); video.src = ""; }
+}
+
+function _mseStop() {
+    _mseActive = false;
+    _mseCleanup();
+    var video = document.getElementById("camVideo");
+    video.style.display = "none";
+}
+
+function _mseFallback(reason) {
+    log("MSE fallback: " + reason);
+    _mseStop();
+    // Switch to MJPEG path
+    var img = document.getElementById("camImage");
+    img.style.display = "";
+    _connectMjpeg();
+}
+
+// --- MJPEG fallback ---
 function _connectMjpeg() {
     if (!_streaming) return;
     var img = document.getElementById("camImage");
@@ -204,13 +406,18 @@ function _connectMjpeg() {
 }
 
 function startView() {
-    // Clean up first (safe to call while already streaming = restart)
+    // Clean up first
     if (_streamTimer) { clearTimeout(_streamTimer); _streamTimer = null; }
+    _mseStop();
     var img = document.getElementById("camImage");
     img.onerror = null; img.onload = null;
     _streaming = true;
     var s = document.getElementById("statusText");
     s.textContent = "CONNECTING..."; s.className = "stopped";
+
+    // Always start with MJPEG (fast ~1s video)
+    // MSE only activates when user enables mic (toggleAudio)
+    img.style.display = "";
     img.src = "/api/snap?t=" + Date.now();
     send("snapPicture2");
     _streamTimer = setTimeout(function() { _streamTimer = null; _connectMjpeg(); }, 2000);
@@ -219,8 +426,11 @@ function startView() {
 function stopView() {
     _streaming = false;
     if (_streamTimer) { clearTimeout(_streamTimer); _streamTimer = null; }
+    _mseStop();
+    _stopAudio();
     var img = document.getElementById("camImage");
     img.onerror = null; img.onload = null; img.src = "";
+    img.style.display = "";
     var s = document.getElementById("statusText");
     s.textContent = "STOPPED"; s.className = "stopped";
 }
@@ -339,14 +549,45 @@ function _startAudio() {
 
 function toggleAudio() {
     var btn = document.getElementById("btnAudio");
-    if (_audioEl) {
-        _stopAudio();
+    if (_mseActive) {
+        // Currently on MSE (synced A/V) -> switch back to MJPEG (fast video, no audio)
+        _mseStop();
         btn.textContent = "Enable Mic";
         btn.classList.remove("active");
+        // Restart MJPEG stream
+        var img = document.getElementById("camImage");
+        img.style.display = "";
+        _connectMjpeg();
+        log("Mic off - switched to fast video");
     } else {
-        _startAudio();
+        // Currently on MJPEG -> switch to MSE (synced A/V with audio)
+        if (!_mseSupported()) {
+            // MSE not available, fall back to separate audio element
+            if (_audioEl) {
+                _stopAudio();
+                btn.textContent = "Enable Mic";
+                btn.classList.remove("active");
+            } else {
+                _startAudio();
+                btn.textContent = "Mic Enabled";
+                btn.classList.add("active");
+                log("Mic on (no sync - MSE not supported)");
+            }
+            return;
+        }
+        // Stop MJPEG, start MSE with audio unmuted
+        if (_streamTimer) { clearTimeout(_streamTimer); _streamTimer = null; }
+        var img = document.getElementById("camImage");
+        img.onerror = null; img.onload = null; img.src = "";
+        _mseStart();
+        // Unmute after a short delay (let MSE initialize)
+        setTimeout(function() {
+            var video = document.getElementById("camVideo");
+            video.muted = false;
+        }, 500);
         btn.textContent = "Mic Enabled";
         btn.classList.add("active");
+        log("Mic on - switched to synced A/V stream");
     }
 }
 
@@ -387,20 +628,30 @@ function setDevName() {
     });
 }
 
-// Mic gain (debounced)
-var _micGainTimer = null;
-function debounceMicGain(val) {
-    if (_micGainTimer) clearTimeout(_micGainTimer);
-    _micGainTimer = setTimeout(function() {
-        fetch("/api/settings?mic_gain=" + val).then(function() {
-            log("Mic gain set to " + val + "x");
-            // Auto-restart audio if playing
-            if (_audioEl) {
-                _stopAudio();
-                _startAudio();
-            }
-        });
-    }, 400);
+// Mic gain - slider updates display only, Apply button saves and restarts
+function updateMicGainDisplay(val) {
+    document.getElementById("micGainVal").textContent = (val / 10).toFixed(1);
+}
+
+function applyMicGain() {
+    var sl = document.getElementById("slMicGain");
+    var val = (sl.value / 10).toFixed(1);
+    fetch("/api/settings?mic_gain=" + val).then(function() {
+        log("Mic gain applied: " + val + "x");
+        if (_mseActive) {
+            // Cleanly switch: stop MSE, then restart with new gain
+            _mseStop();
+            var img = document.getElementById("camImage");
+            img.style.display = "none";
+            _mseStart();
+            setTimeout(function() {
+                document.getElementById("camVideo").muted = false;
+            }, 500);
+        } else if (_audioEl) {
+            _stopAudio();
+            _startAudio();
+        }
+    });
 }
 
 var _compLabels = {1:"Studio (largest)",2:"Very high quality",3:"High quality",4:"Good quality",5:"Balanced (default)",6:"Moderate compression",7:"Compact",8:"Small files",9:"Very small",10:"Max compression"};
@@ -442,7 +693,7 @@ function loadSettings() {
             var sl = document.getElementById("slMicGain");
             if (sl) {
                 sl.value = Math.round(d.mic_gain * 10);
-                sl.nextElementSibling.textContent = d.mic_gain.toFixed(1);
+                document.getElementById("micGainVal").textContent = d.mic_gain.toFixed(1);
             }
         }
         var sel = document.getElementById("selRecCodec");
@@ -681,6 +932,7 @@ function init() {
 <div id="main">
     <div id="viewer">
         <img id="camImage" src="" alt="Camera feed" />
+        <video id="camVideo" autoplay muted playsinline style="display:none"></video>
     </div>
 
     <div id="sidebar">
@@ -905,8 +1157,11 @@ function init() {
                 </div>
                 <div class="slider-row">
                     <label>Mic gain</label>
-                    <input type="range" id="slMicGain" min="10" max="50" value="30" step="1" oninput="this.nextElementSibling.textContent=(this.value/10).toFixed(1);debounceMicGain(this.value/10)">
-                    <span class="val">3.0</span>
+                    <input type="range" id="slMicGain" min="10" max="50" value="30" step="1" oninput="updateMicGainDisplay(this.value)">
+                    <span class="val" id="micGainVal">3.0</span>
+                </div>
+                <div class="btn-row">
+                    <button class="btn" onclick="applyMicGain()">Apply Gain</button>
                 </div>
                 <div class="setting">
                     <label>Rec codec</label>

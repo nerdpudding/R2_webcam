@@ -162,12 +162,12 @@ Patrol config is stored in the encrypted config file and persists between sessio
 
 Option **1** from the main menu opens a web-based control panel in your browser with:
 
-- **Live stream** - MJPEG video feed with proper state tracking (CONNECTING / LIVE / RECONNECTING / STOPPED)
-- **Pan/Tilt controls** - Arrow buttons to move the camera, configurable PTZ duration and speed, 4 preset positions (Go buttons always visible, Save buttons hidden behind toggle with confirmation dialog), automated patrol with configurable dwell times
+- **Hybrid live stream** - MJPEG video (mic off, ~1s latency) or MSE/fMP4 synced audio+video (mic on, ~3-3.5s latency). Automatic switching, with MSE fallback to MJPEG for unsupported browsers. State tracking (CONNECTING / LIVE / RECONNECTING / STOPPED)
+- **Pan/Tilt controls** - Arrow buttons to move the camera, configurable PTZ duration and speed, preset positions (Go/Save), automated patrol with configurable dwell times
 - **Infrared toggle** - Auto, force on, force off
 - **Image adjustments** - Brightness, contrast, saturation, sharpness sliders, mirror/flip
 - **Video settings** - Resolution, framerate, bitrate controls
-- **Audio** - Enable/disable mic with adjustable gain (1.0-5.0x), auto-restarts stream on gain change
+- **Audio** - Enable/disable mic (switches to synced A/V stream), adjustable gain (1.0-5.0x) with Apply button
 - **OSD overlay** - Toggle timestamp and camera name overlay, set device name
 - **Recording** - Start/stop local recording with selectable quality preset (auto-detected from available encoders)
 - **Motion detection** - Enable/disable with sensitivity setting (detection only, events not captured)
@@ -182,9 +182,10 @@ When the server is running (options 1 or 2), these local URLs are available:
 
 | URL | Format | Use case |
 |-----|--------|----------|
-| `http://localhost:8088/api/mjpeg` | MJPEG (video only) | Browsers, OpenCV, other apps that consume MJPEG |
+| `http://localhost:8088/api/mjpeg` | MJPEG (video only) | Browsers, OpenCV, NerdPudding, other apps that consume MJPEG |
+| `http://localhost:8088/api/fmp4` | Fragmented MP4 (video + audio) | MSE-capable browsers (used internally by web viewer when mic is enabled) |
 | `http://localhost:8088/api/stream` | MPEG-TS (video + audio) | VLC, ffplay, media players |
-| `http://localhost:8088/api/audio` | MP3 (audio only) | Browser audio playback |
+| `http://localhost:8088/api/audio` | MP3 (audio only) | Browser audio playback (legacy, superseded by MSE for synced A/V) |
 | `http://localhost:8088/api/snap` | Single JPEG | Quick snapshot from any HTTP client |
 | `http://localhost:8088/api/settings` | JSON | Read/write app settings (mic gain, recording quality) |
 | `http://localhost:8088/api/record?action=X` | JSON | Start/stop/status for local recording |

@@ -48,7 +48,7 @@ CONFIG_PLAIN = os.path.join(SCRIPT_DIR, "config.json")
 _viewer_server = None
 _stream_quality = 7  # 1-10 scale: 10=best quality, 1=lowest. Maps to ffmpeg -q:v internally.
 _mic_gain = 3.0  # Audio volume multiplier for mic stream (1.0-5.0)
-_rtsp_transport = "udp"  # "udp" (smooth/low latency) or "tcp" (reliable/no packet loss)
+_rtsp_transport = "tcp"  # "tcp" (reliable, zero post-timeout failures) or "udp" (lower startup latency)
 
 # Shared MJPEG source: one ffmpeg process, multiple browser clients
 # Uses simple polling (no Condition/Lock) - CPython's GIL makes single
@@ -58,7 +58,7 @@ _mjpeg_frame_id = 0      # incremented on each new frame (written by reader thre
 _mjpeg_proc = None        # shared ffmpeg process
 _mjpeg_quality = None     # quality level when source was started
 _mjpeg_last_frame_time = 0  # time.time() when last frame was received
-_MJPEG_STALE_SECONDS = 5    # force-restart if no frame for this long
+_MJPEG_STALE_SECONDS = 2    # force-restart if no frame for this long
 
 
 def _start_mjpeg_source(cam):
@@ -832,9 +832,12 @@ def ptz_set_speed(config):
 def ptz_list_presets(config):
     data = cgi("getPTZPresetPointList", config)
     if ok(data, "getPTZPresetPointList"):
-        names = data.get("point0", "")
-        if names:
-            print(f"  Presets: {urllib.parse.unquote(names)}")
+        presets = []
+        for key, val in sorted(data.items()):
+            if key.startswith("point") and key[5:].isdigit() and val:
+                presets.append(urllib.parse.unquote(val))
+        if presets:
+            print(f"  Presets: {', '.join(presets)}")
         else:
             print("  No presets saved")
 
@@ -1309,7 +1312,7 @@ def open_viewer(config, open_browser=True):
                         else:
                             time.sleep(0.02)
                             no_frame_count += 1
-                            if no_frame_count >= 250:  # ~5s no frames
+                            if no_frame_count >= 100:  # ~2s no frames
                                 log.warning("MJPEG client: %ds no frames, requesting source restart", no_frame_count // 50)
                                 _start_mjpeg_source(cam)
                                 no_frame_count = 0
@@ -1537,6 +1540,65 @@ def open_viewer(config, open_browser=True):
                         if err:
                             lines = [l for l in err.splitlines() if l.strip()][-5:]
                             log.warning("AV stream ffmpeg stderr:\n  %s", "\n  ".join(lines))
+                        proc.kill()
+                    except Exception:
+                        pass
+                return
+
+            # Fragmented MP4 A/V stream for MSE (RTSP -> fMP4, for browser <video>)
+            if parsed.path == "/api/fmp4":
+                self.connection.settimeout(30)
+                rtsp_port = cam.get("port", 88)
+                rtsp_url = (f"rtsp://{cam['username']}:{cam['password']}"
+                            f"@{cam['ip']}:{rtsp_port}/videoMain")
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                fmp4_probe = "500000" if _rtsp_transport == "tcp" else "32768"
+                fmp4_analyze = "500000" if _rtsp_transport == "tcp" else "0"
+                gain = f"volume={_mic_gain:.1f}" if _mic_gain != 1.0 else "volume=1.0"
+                log.info("fMP4 stream starting (transport=%s, gain=%.1f, client=%s)",
+                         _rtsp_transport, _mic_gain, self.client_address[0])
+                try:
+                    proc = subprocess.Popen(
+                        ["ffmpeg",
+                         "-fflags", "+nobuffer+flush_packets+genpts",
+                         "-flags", "low_delay",
+                         "-probesize", fmp4_probe,
+                         "-analyzeduration", fmp4_analyze,
+                         "-rtsp_transport", _rtsp_transport,
+                         "-i", rtsp_url,
+                         "-c:v", "copy",
+                         "-c:a", "aac", "-b:a", "128k",
+                         "-af", gain,
+                         "-f", "mp4",
+                         "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+                         "-frag_duration", "500000",
+                         "-min_frag_duration", "250000",
+                         "-flush_packets", "1",
+                         "pipe:1"],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE
+                    )
+                    while True:
+                        chunk = proc.stdout.read(4096)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    log.info("fMP4 stream disconnected")
+                except Exception as e:
+                    log.error("fMP4 stream error: %s", e)
+                finally:
+                    try:
+                        err = proc.stderr.read().decode(errors="replace").strip()
+                        if err:
+                            lines = [l for l in err.splitlines() if l.strip()][-5:]
+                            log.warning("fMP4 stream ffmpeg stderr:\n  %s", "\n  ".join(lines))
                         proc.kill()
                     except Exception:
                         pass
