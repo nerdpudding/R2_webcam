@@ -1,0 +1,19 @@
+# Encrypted credentials (personal, master-password protected)
+config.enc
+
+# Plaintext config (deleted after first run, but just in case)
+config.json
+
+# Generated viewer with baked-in credentials
+nerdcam.html
+
+# Snapshots
+snapshot_*.jpg
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude plans
+claude_plans/

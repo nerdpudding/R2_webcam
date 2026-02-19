@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<!--
+NerdCam Viewer - Foscam R2 camera control and live view.
+All requests go through local proxy (same origin, no CORS).
+Served by foscam_setup.py (option v).
+-->
+<html>
+<head>
+<title>NerdCam Viewer</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+    background: #1a1a2e;
+    color: #eee;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+#topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: #16213e;
+    border-bottom: 2px solid #0f3460;
+}
+#topbar h1 { font-size: 1.1em; color: #e94560; }
+.live { color: #2ecc71; font-weight: bold; font-size: 0.85em; }
+.stopped { color: #e74c3c; font-weight: bold; font-size: 0.85em; }
+#main { display: flex; flex: 1; overflow: hidden; }
+#viewer {
+    flex: 1; display: flex; align-items: center;
+    justify-content: center; background: #000;
+}
+#viewer img { max-width: 100%; max-height: 100%; object-fit: contain; }
+#sidebar {
+    width: 280px; background: #16213e; padding: 12px;
+    display: flex; flex-direction: column; gap: 8px;
+    border-left: 2px solid #0f3460; overflow-y: auto;
+}
+.panel h3 {
+    font-size: 0.78em; color: #e94560; margin-bottom: 5px;
+    text-transform: uppercase; letter-spacing: 1px; cursor: pointer;
+    user-select: none;
+}
+.panel h3:hover { color: #fff; }
+.panel h3::before { content: ""; margin-right: 4px; }
+.panel.collapsed .panel-body { display: none; }
+.panel.collapsed h3::before { content: ""; }
+#ptz {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 3px; max-width: 180px;
+}
+#ptz button {
+    width: 100%; aspect-ratio: 1; border: 1px solid #0f3460;
+    background: #1a1a2e; color: #eee; font-size: 1.3em;
+    cursor: pointer; border-radius: 4px;
+}
+#ptz button:hover { background: #e94560; }
+#ptz button:active { background: #c0392b; }
+#ptz button.home { background: #0f3460; font-size: 0.6em; }
+.btn {
+    padding: 4px 8px; border: 1px solid #0f3460; background: #0f3460;
+    color: #eee; border-radius: 4px; cursor: pointer;
+    font-size: 0.75em; width: 100%; margin-top: 2px;
+}
+.btn:hover { background: #e94560; border-color: #e94560; }
+.btn.danger { background: #c0392b; border-color: #c0392b; }
+.btn.active { background: #2ecc71; border-color: #2ecc71; }
+.btn-row { display: flex; gap: 3px; }
+.btn-row .btn { flex: 1; }
+.slider-row {
+    display: flex; align-items: center; gap: 5px; margin: 3px 0;
+}
+.slider-row label { font-size: 0.68em; color: #7f8c8d; width: 65px; }
+.slider-row input[type=range] { flex: 1; accent-color: #e94560; }
+.slider-row .val { font-size: 0.68em; width: 25px; text-align: right; }
+.setting { display: flex; align-items: center; gap: 5px; margin: 3px 0; }
+.setting label { font-size: 0.68em; color: #7f8c8d; width: 85px; }
+.setting input, .setting select {
+    background: #1a1a2e; border: 1px solid #0f3460; color: #eee;
+    padding: 2px 5px; border-radius: 3px; font-size: 0.75em; width: 75px;
+}
+#output {
+    font-family: monospace; font-size: 0.62em; background: #0d0d1a;
+    border: 1px solid #0f3460; border-radius: 4px; padding: 6px;
+    height: 130px; overflow-y: auto; white-space: pre-wrap;
+    word-break: break-all; color: #7f8c8d;
+}
+</style>
+<script>
+var C = { ptzDur: 500 };
+var viewerTask = null;
+
+// All requests go through local proxy -- no CORS issues
+function send(cmd, extra, callback) {
+    var url = "/api/cam?cmd=" + cmd;
+    if (extra) url += "&" + extra;
+    fetch(url).then(function(r) { return r.text(); }).then(function(text) {
+        // Parse XML response
+        var parser = new DOMParser();
+        var xml = parser.parseFromString(text, "text/xml");
+        var result = {};
+        var nodes = xml.documentElement.children;
+        var lines = [];
+        for (var i = 0; i < nodes.length; i++) {
+            var key = nodes[i].tagName;
+            var val = nodes[i].textContent || "";
+            result[key] = val;
+            if (key !== "result") lines.push(key + ": " + decodeURIComponent(val));
+        }
+        log(cmd + " (result=" + (result.result||"?") + "):\n" + lines.join("\n"));
+        if (callback) callback(result);
+    }).catch(function(e) {
+        log(cmd + ": ERROR " + e);
+    });
+}
+
+function log(msg) {
+    var el = document.getElementById("output");
+    el.textContent = msg;
+    el.scrollTop = el.scrollHeight;
+}
+
+// PTZ
+function ptz(cmd) {
+    send(cmd);
+    setTimeout(function() { send("ptzStopRun"); }, C.ptzDur);
+}
+
+// MJPEG stream viewer (RTSP -> ffmpeg -> MJPEG, ~25 FPS)
+function startView() {
+    var img = document.getElementById("camImage");
+    var s = document.getElementById("statusText");
+    // Show snapshot immediately while stream connects
+    s.textContent = "CONNECTING..."; s.className = "stopped";
+    img.src = "/api/snap?t=" + Date.now();
+    // Poke camera to send a fresh keyframe (speeds up ffmpeg start)
+    send("snapPicture2");
+    // Start MJPEG stream after delay (ffmpeg needs time to connect)
+    setTimeout(function() {
+        img.src = "/api/mjpeg?t=" + Date.now();
+        s.textContent = "LIVE"; s.className = "live";
+        img.onerror = function() {
+            log("Stream connecting - retrying...");
+            s.textContent = "RECONNECTING..."; s.className = "stopped";
+            img.src = "/api/snap?t=" + Date.now();
+            setTimeout(function() {
+                img.onerror = null;
+                img.src = "/api/mjpeg?t=" + Date.now();
+                s.textContent = "LIVE"; s.className = "live";
+            }, 3000);
+        };
+    }, 2000);
+}
+function stopView() {
+    var img = document.getElementById("camImage");
+    img.onerror = null;
+    img.src = "";
+    var s = document.getElementById("statusText");
+    s.textContent = "STOPPED"; s.className = "stopped";
+}
+
+// Sliders
+function setSlider(cmd, param, el) {
+    var val = el.value;
+    el.nextElementSibling.textContent = val;
+    send(cmd, param + "=" + val);
+}
+
+// IR
+function irAuto() { send("setInfraLedConfig", "mode=0"); }
+function irOn() {
+    send("setInfraLedConfig", "mode=1");
+    setTimeout(function() { send("openInfraLed"); }, 300);
+}
+function irOff() {
+    send("setInfraLedConfig", "mode=1");
+    setTimeout(function() { send("closeInfraLed"); }, 300);
+}
+
+// Video settings - stream 0 = main stream
+// Camera uses indexed params: resolution0, bitRate0, frameRate0, etc.
+var videoParams = { resolution: "7", frameRate: "25", bitRate: "4194304", GOP: "30", isVBR: "1" };
+
+function loadVideoSettings() {
+    send("getVideoStreamParam", null, function(r) {
+        // Read main stream (index 0)
+        if (r.resolution0 !== undefined) videoParams.resolution = r.resolution0;
+        if (r.frameRate0 !== undefined) videoParams.frameRate = r.frameRate0;
+        if (r.bitRate0 !== undefined) videoParams.bitRate = r.bitRate0;
+        if (r.GOP0 !== undefined) videoParams.GOP = r.GOP0;
+        if (r.isVBR0 !== undefined) videoParams.isVBR = r.isVBR0;
+        var el;
+        el = document.getElementById("selRes"); if (el) el.value = videoParams.resolution;
+        el = document.getElementById("selFps"); if (el) el.value = videoParams.frameRate;
+        el = document.getElementById("selBit"); if (el) el.value = videoParams.bitRate;
+    });
+}
+
+function applyVideoParam(key, val) {
+    videoParams[key] = val;
+    // streamType=0 = main stream
+    send("setVideoStreamParam",
+        "streamType=0" +
+        "&resolution=" + videoParams.resolution +
+        "&bitRate=" + videoParams.bitRate +
+        "&frameRate=" + videoParams.frameRate +
+        "&GOP=" + videoParams.GOP +
+        "&isVBR=" + videoParams.isVBR);
+}
+
+// Motion detection
+function motionEnable() { send("setMotionDetectConfig", "isEnable=1"); }
+function motionDisable() { send("setMotionDetectConfig", "isEnable=0"); }
+function motionSensitivity(val) { send("setMotionDetectConfig", "isEnable=1&sensitivity=" + val); }
+
+// Collapsible panels
+function togglePanel(el) {
+    el.closest(".panel").classList.toggle("collapsed");
+}
+
+// Settings
+function applyPtz() {
+    var v = parseInt(document.getElementById("inPtzDur").value);
+    if (!isNaN(v) && v >= 50) C.ptzDur = v;
+}
+
+function loadImageSettings() {
+    send("getImageSetting", null, function(r) {
+        if (r.brightness) { setVal("slBright", r.brightness); }
+        if (r.contrast) { setVal("slContrast", r.contrast); }
+        if (r.saturation) { setVal("slSat", r.saturation); }
+        if (r.sharpness) { setVal("slSharp", r.sharpness); }
+    });
+}
+function setVal(id, val) {
+    var el = document.getElementById(id);
+    if (el) { el.value = val; el.nextElementSibling.textContent = val; }
+}
+
+function init() {
+    startView();
+    loadImageSettings();
+    loadVideoSettings();
+    send("getAudioVolume", null, function(r) {
+        if (r.volume) setVal("slVolume", r.volume);
+    });
+}
+</script>
+</head>
+<body onload="init()">
+
+<div id="topbar">
+    <h1>NerdCam</h1>
+    <span id="statusText" class="stopped">...</span>
+</div>
+
+<div id="main">
+    <div id="viewer">
+        <img id="camImage" src="" alt="Camera feed" />
+    </div>
+
+    <div id="sidebar">
+        <!-- PTZ -->
+        <div class="panel">
+            <h3 onclick="togglePanel(this)">Pan / Tilt</h3>
+            <div class="panel-body">
+                <div id="ptz">
+                    <button onclick="ptz('ptzMoveTopLeft')">&#8598;</button>
+                    <button onclick="ptz('ptzMoveUp')">&#8593;</button>
+                    <button onclick="ptz('ptzMoveTopRight')">&#8599;</button>
+                    <button onclick="ptz('ptzMoveLeft')">&#8592;</button>
+                    <button onclick="ptz('ptzReset')" class="home">HOME</button>
+                    <button onclick="ptz('ptzMoveRight')">&#8594;</button>
+                    <button onclick="ptz('ptzMoveBottomLeft')">&#8601;</button>
+                    <button onclick="ptz('ptzMoveDown')">&#8595;</button>
+                    <button onclick="ptz('ptzMoveBottomRight')">&#8600;</button>
+                </div>
+                <div class="setting">
+                    <label>Speed</label>
+                    <select onchange="send('setPTZSpeed','speed='+this.value)">
+                        <option value="0">Slow</option>
+                        <option value="1">Normal</option>
+                        <option value="2" selected>Fast</option>
+                        <option value="3">Very fast</option>
+                        <option value="4">Fastest</option>
+                    </select>
+                </div>
+                <div class="btn-row">
+                    <button class="btn" onclick="send('ptzAddPresetPoint','name=pos1')">Save 1</button>
+                    <button class="btn" onclick="send('ptzGotoPresetPoint','name=pos1')">Go 1</button>
+                </div>
+                <div class="btn-row">
+                    <button class="btn" onclick="send('ptzAddPresetPoint','name=pos2')">Save 2</button>
+                    <button class="btn" onclick="send('ptzGotoPresetPoint','name=pos2')">Go 2</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- IR -->
+        <div class="panel">
+            <h3 onclick="togglePanel(this)">Infrared</h3>
+            <div class="panel-body">
+                <div class="btn-row">
+                    <button class="btn" onclick="irAuto()">Auto</button>
+                    <button class="btn active" onclick="irOn()">ON</button>
+                    <button class="btn danger" onclick="irOff()">OFF</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Image -->
+        <div class="panel">
+            <h3 onclick="togglePanel(this)">Image</h3>
+            <div class="panel-body">
+                <div class="slider-row">
+                    <label>Brightness</label>
+                    <input type="range" id="slBright" min="0" max="100" value="50" oninput="setSlider('setBrightness','brightness',this)">
+                    <span class="val">50</span>
+                </div>
+                <div class="slider-row">
+                    <label>Contrast</label>
+                    <input type="range" id="slContrast" min="0" max="100" value="50" oninput="setSlider('setContrast','constrast',this)">
+                    <span class="val">50</span>
+                </div>
+                <div class="slider-row">
+                    <label>Saturation</label>
+                    <input type="range" id="slSat" min="0" max="100" value="50" oninput="setSlider('setSaturation','saturation',this)">
+                    <span class="val">50</span>
+                </div>
+                <div class="slider-row">
+                    <label>Sharpness</label>
+                    <input type="range" id="slSharp" min="0" max="100" value="50" oninput="setSlider('setSharpness','sharpness',this)">
+                    <span class="val">50</span>
+                </div>
+                <div class="btn-row">
+                    <button class="btn" onclick="send('mirrorVideo','isMirror=1')">Mirror</button>
+                    <button class="btn" onclick="send('mirrorVideo','isMirror=0')">Normal</button>
+                </div>
+                <div class="btn-row">
+                    <button class="btn" onclick="send('flipVideo','isFlip=1')">Flip</button>
+                    <button class="btn" onclick="send('flipVideo','isFlip=0')">Normal</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Video Settings -->
+        <div class="panel collapsed">
+            <h3 onclick="togglePanel(this)">Video Settings</h3>
+            <div class="panel-body">
+                <button class="btn" onclick="loadVideoSettings()">Reload from camera</button>
+                <div class="setting">
+                    <label>Resolution</label>
+                    <select id="selRes" onchange="applyVideoParam('resolution',this.value)">
+                        <option value="7">1080p</option>
+                        <option value="0">720p</option>
+                        <option value="1">VGA</option>
+                        <option value="2">QVGA</option>
+                    </select>
+                </div>
+                <div class="setting">
+                    <label>Framerate</label>
+                    <select id="selFps" onchange="applyVideoParam('frameRate',this.value)">
+                        <option value="30">30</option>
+                        <option value="25">25</option>
+                        <option value="20">20</option>
+                        <option value="15">15</option>
+                        <option value="10">10</option>
+                        <option value="5">5</option>
+                    </select>
+                </div>
+                <div class="setting">
+                    <label>Bitrate</label>
+                    <select id="selBit" onchange="applyVideoParam('bitRate',this.value)">
+                        <option value="4194304">4 Mbps</option>
+                        <option value="2097152">2 Mbps</option>
+                        <option value="1048576">1 Mbps</option>
+                        <option value="524288">512 kbps</option>
+                        <option value="262144">256 kbps</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Motion Detection -->
+        <div class="panel collapsed">
+            <h3 onclick="togglePanel(this)">Motion Detection</h3>
+            <div class="panel-body">
+                <button class="btn" onclick="send('getMotionDetectConfig')">Get status</button>
+                <div class="btn-row">
+                    <button class="btn active" onclick="motionEnable()">Enable</button>
+                    <button class="btn danger" onclick="motionDisable()">Disable</button>
+                </div>
+                <div class="setting">
+                    <label>Sensitivity</label>
+                    <select onchange="motionSensitivity(this.value)">
+                        <option value="2">High</option>
+                        <option value="1" selected>Medium</option>
+                        <option value="0">Low</option>
+                        <option value="3">Lower</option>
+                        <option value="4">Lowest</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Audio -->
+        <div class="panel collapsed">
+            <h3 onclick="togglePanel(this)">Audio</h3>
+            <div class="panel-body">
+                <div class="slider-row">
+                    <label>Volume</label>
+                    <input type="range" id="slVolume" min="0" max="100" value="100" oninput="this.nextElementSibling.textContent=this.value;send('setAudioVolume','volume='+this.value)">
+                    <span class="val">100</span>
+                </div>
+                <div class="btn-row">
+                    <button class="btn active" onclick="send('setPCAudioAlarmCfg','isEnablePCAudioAlarm=1')">Sound alarm ON</button>
+                    <button class="btn danger" onclick="send('setPCAudioAlarmCfg','isEnablePCAudioAlarm=0')">Sound alarm OFF</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stream -->
+        <div class="panel">
+            <h3 onclick="togglePanel(this)">Stream</h3>
+            <div class="panel-body">
+                <div class="btn-row">
+                    <button class="btn active" onclick="startView()">Start</button>
+                    <button class="btn danger" onclick="stopView()">Stop</button>
+                </div>
+                <div class="setting">
+                    <label>PTZ dur (ms)</label>
+                    <input type="number" id="inPtzDur" min="50" step="50" value="500" onchange="applyPtz()">
+                </div>
+            </div>
+        </div>
+
+        <!-- Info -->
+        <div class="panel collapsed">
+            <h3 onclick="togglePanel(this)">Device Info</h3>
+            <div class="panel-body">
+                <div class="btn-row">
+                    <button class="btn" onclick="send('getDevInfo')">Device</button>
+                    <button class="btn" onclick="send('getDevState')">State</button>
+                </div>
+                <div class="btn-row">
+                    <button class="btn" onclick="send('getWifiConfig')">WiFi</button>
+                    <button class="btn" onclick="send('getPortInfo')">Ports</button>
+                </div>
+                <div class="btn-row">
+                    <button class="btn" onclick="send('getIPInfo')">IP Info</button>
+                    <button class="btn" onclick="send('getSystemTime')">Time</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Output -->
+        <div class="panel">
+            <h3>Output</h3>
+            <div id="output">Ready.</div>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>
