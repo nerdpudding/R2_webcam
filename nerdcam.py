@@ -133,6 +133,8 @@ _recording_info = None  # {"filename": str, "started": float}
 _max_record_seconds = 3600
 _rec_codec = None       # codec key, set by _detect_rec_codecs()
 _rec_compression = 5    # 1-10: 1=best quality/largest, 10=max compression/smallest
+_rec_gpu = "auto"       # "auto" or GPU index ("0", "1", etc.) for NVENC
+_available_gpus = []    # detected NVIDIA GPUs: [(index, name), ...]
 
 # Codec definitions: (key, encoder_name, description, required_ffmpeg_encoder)
 # encoder_name=None means -c:v copy (no re-encode, compression level ignored)
@@ -184,14 +186,18 @@ def _rec_video_args():
     qval = int(lo + (_rec_compression - 1) * (hi - lo) / 9)
 
     if encoder.endswith("_nvenc"):
-        return ["-c:v", encoder, "-cq", str(qval), "-preset", "p4"]
+        args = ["-c:v", encoder]
+        if _rec_gpu != "auto" and len(_available_gpus) > 1:
+            args += ["-gpu", _rec_gpu]
+        args += ["-cq", str(qval), "-preset", "p4"]
+        return args
     else:
         return ["-c:v", encoder, "-crf", str(qval), "-preset", "fast"]
 
 
 def _detect_rec_codecs():
-    """Probe ffmpeg for available encoders. Called once at startup."""
-    global REC_CODECS, _DEFAULT_REC_CODEC
+    """Probe ffmpeg for available encoders and GPUs. Called once at startup."""
+    global REC_CODECS, _DEFAULT_REC_CODEC, _available_gpus
     available = set()
     try:
         out = subprocess.run(["ffmpeg", "-encoders"],
@@ -200,6 +206,19 @@ def _detect_rec_codecs():
             parts = line.split()
             if len(parts) >= 2:
                 available.add(parts[1])
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Detect NVIDIA GPUs
+    _available_gpus = []
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5)
+        for line in out.stdout.strip().splitlines():
+            parts = [p.strip() for p in line.split(",", 1)]
+            if len(parts) == 2:
+                _available_gpus.append((parts[0], parts[1]))
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
@@ -220,7 +239,11 @@ def _detect_rec_codecs():
     gpu = sum(1 for k in REC_CODECS if k.startswith("nvenc_"))
     sw = sum(1 for k in REC_CODECS if k.startswith("sw_"))
     info = []
-    if gpu: info.append(f"{gpu} GPU")
+    if gpu:
+        info.append(f"{gpu} GPU")
+        if len(_available_gpus) > 1:
+            names = ", ".join(f"{i}:{n}" for i, n in _available_gpus)
+            info.append(f"GPUs: [{names}]")
     if sw: info.append(f"{sw} software")
     if "original" in REC_CODECS: info.append("passthrough")
     print(f"  Recording codecs: {', '.join(info)} (default: {_DEFAULT_REC_CODEC})")
@@ -319,7 +342,7 @@ def _onboarding_scan_wifi(config):
 
 def _load_settings(config):
     """Restore app settings from config."""
-    global _stream_quality, _mic_gain, _rec_codec, _rec_compression
+    global _stream_quality, _mic_gain, _rec_codec, _rec_compression, _rec_gpu
     settings = config.get("settings", {})
     _stream_quality = settings.get("stream_quality", 7)
     _mic_gain = settings.get("mic_gain", 3.0)
@@ -327,6 +350,9 @@ def _load_settings(config):
     _rec_codec = rc if rc in REC_CODECS else _DEFAULT_REC_CODEC
     comp = settings.get("rec_compression", 5)
     _rec_compression = max(1, min(10, int(comp)))
+    gpu = settings.get("rec_gpu", "auto")
+    valid_gpus = {"auto"} | {idx for idx, _ in _available_gpus}
+    _rec_gpu = gpu if gpu in valid_gpus else "auto"
 
 
 def _save_settings(config):
@@ -337,6 +363,7 @@ def _save_settings(config):
     config["settings"]["mic_gain"] = _mic_gain
     config["settings"]["rec_codec"] = _rec_codec
     config["settings"]["rec_compression"] = _rec_compression
+    config["settings"]["rec_gpu"] = _rec_gpu
     save_config(config)
 
 
@@ -1081,7 +1108,7 @@ def open_viewer(config, open_browser=True):
             pass
 
         def do_GET(self):
-            global _mic_gain, _rec_codec, _rec_compression
+            global _mic_gain, _rec_codec, _rec_compression, _rec_gpu
             parsed = urlparse(self.path)
 
             # Proxy: /api/cam?cmd=XXX&param=val -> camera CGI
@@ -1233,17 +1260,27 @@ def open_viewer(config, open_browser=True):
                             changed = True
                     except (ValueError, IndexError):
                         pass
+                if "rec_gpu" in qs:
+                    val = qs["rec_gpu"][0]
+                    valid = {"auto"} | {idx for idx, _ in _available_gpus}
+                    if val in valid:
+                        _rec_gpu = val
+                        changed = True
                 if changed:
                     _save_settings(config)
                 import json as _json
                 codecs_info = {k: {"desc": v[1]}
                                for k, v in REC_CODECS.items()}
+                gpus_info = [{"index": idx, "name": name}
+                             for idx, name in _available_gpus]
                 resp_data = _json.dumps({
                     "mic_gain": _mic_gain,
                     "stream_quality": _stream_quality,
                     "rec_codec": _rec_codec,
                     "rec_compression": _rec_compression,
+                    "rec_gpu": _rec_gpu,
                     "rec_codecs": codecs_info,
+                    "gpus": gpus_info,
                 })
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -1700,7 +1737,7 @@ atexit.register(_cleanup_recording)
 
 def _recording_menu(config):
     """CLI menu for local recording."""
-    global _rec_codec, _rec_compression
+    global _rec_codec, _rec_compression, _rec_gpu
     print("\n--- Local Recording ---")
     rec_dir = os.path.join(SCRIPT_DIR, "recordings")
     print(f"  Save location: {rec_dir}")
@@ -1713,8 +1750,14 @@ def _recording_menu(config):
     comp_label = COMPRESSION_LABELS.get(_rec_compression, "")
     print(f"  Codec: {_rec_codec} - {codec_desc}")
     print(f"  Compression: {_rec_compression}/10 - {comp_label}")
-    print("\n  Options:")
-    print("  s=start  x=stop  c=change codec  l=compression level  q=back")
+    if len(_available_gpus) > 1:
+        gpu_label = _rec_gpu if _rec_gpu == "auto" else f"GPU {_rec_gpu}: {dict(_available_gpus).get(_rec_gpu, '?')}"
+        print(f"  GPU: {gpu_label}")
+    opts = "  s=start  x=stop  c=change codec  l=compression level"
+    if len(_available_gpus) > 1:
+        opts += "  g=select GPU"
+    opts += "  q=back"
+    print(f"\n  Options:\n  {opts}")
 
     while True:
         choice = input("  Rec> ").strip().lower()
@@ -1757,6 +1800,22 @@ def _recording_menu(config):
                         print("  Must be 1-10")
                 except ValueError:
                     print("  Invalid number")
+        elif choice == "g" and len(_available_gpus) > 1:
+            print("\n  Available GPUs:")
+            marker = " *" if _rec_gpu == "auto" else ""
+            print(f"    auto   - Let ffmpeg choose{marker}")
+            for idx, name in _available_gpus:
+                marker = " *" if _rec_gpu == idx else ""
+                print(f"    {idx:6s} - {name}{marker}")
+            val = input(f"\n  GPU [{_rec_gpu}]: ").strip()
+            if not val:
+                print("  Unchanged")
+            elif val == "auto" or val in {idx for idx, _ in _available_gpus}:
+                _rec_gpu = val
+                _save_settings(config)
+                print(f"  Set to: {val}")
+            else:
+                print("  Unknown GPU")
         else:
             print("  Unknown option")
 

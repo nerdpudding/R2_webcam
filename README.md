@@ -32,12 +32,12 @@ sudo apt install ffmpeg
 ```
 
 **Optional:**
-- **NVIDIA GPU + drivers** for hardware-accelerated recording (NVENC H.264/H.265/AV1). Without a GPU, software encoding (libx264/libx265) is used automatically.
+- **NVIDIA GPU + drivers** for hardware-accelerated recording (NVENC H.264/H.265/AV1). Without a GPU, software encoding (libx264/libx265) is used automatically. NVENC uses the GPU's dedicated encoder chip (not CUDA cores), so impact on other GPU workloads is minimal (~1% utilization). Systems with multiple GPUs can select which one to use for recording.
 - **OpenCV** (`pip install opencv-python`) for the RTSP test function (CLI only)
 - **VLC** or **ffplay** for direct stream playback (CLI only)
 - **xdg-open** for auto-opening the browser (present on most Linux desktops)
 
-The app checks for dependencies at startup and warns about anything missing.
+The app auto-detects available encoders, GPUs, and dependencies at startup.
 
 ## Quick Start
 
@@ -120,9 +120,9 @@ The advanced menu gives access to all camera features:
 
 | Option | Feature | What it does |
 |--------|---------|-------------|
-| **e** | Local recording | Start/stop recording the camera stream to MP4 files in `recordings/`. Choose quality preset (NVENC GPU or software encoding). Auto-detects available encoders |
+| **e** | Local recording | Start/stop recording to MP4 files in `recordings/`. Choose codec, compression level (1-10), and GPU. Auto-detects available encoders and GPUs |
 
-Recording quality presets are detected at startup based on your hardware. With an NVIDIA GPU, hardware encoding (NVENC) is used for minimal CPU impact. Without a GPU, software encoding (x264/x265) is offered. Files are saved to the `recordings/` directory.
+Recording settings are independent: **codec** (what encoder), **compression** (1=studio to 10=max compression), and **GPU** (which NVIDIA GPU, only shown with 2+ GPUs). Available codecs are detected at startup. Files are named `nerdcam_YYYYMMDD_HHMMSS.mp4`.
 
 ### Network
 

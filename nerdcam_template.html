@@ -372,6 +372,12 @@ function setRecCodec(val) {
     });
 }
 
+function setRecGpu(val) {
+    fetch("/api/settings?rec_gpu=" + val).then(function() {
+        log("Recording GPU: " + val);
+    });
+}
+
 var _compTimer = null;
 function debounceRecComp(val) {
     var el = document.getElementById("compLabel");
@@ -412,6 +418,21 @@ function loadSettings() {
             }
             var lbl = document.getElementById("compLabel");
             if (lbl) lbl.textContent = _compLabels[d.rec_compression] || "";
+        }
+        if (d.gpus && d.gpus.length > 1) {
+            var gpuRow = document.getElementById("gpuRow");
+            var gpuSel = document.getElementById("selRecGpu");
+            if (gpuRow && gpuSel) {
+                gpuRow.style.display = "flex";
+                gpuSel.innerHTML = '<option value="auto">Auto</option>';
+                for (var g = 0; g < d.gpus.length; g++) {
+                    var opt = document.createElement("option");
+                    opt.value = d.gpus[g].index;
+                    opt.textContent = d.gpus[g].index + ": " + d.gpus[g].name;
+                    gpuSel.appendChild(opt);
+                }
+                if (d.rec_gpu) gpuSel.value = d.rec_gpu;
+            }
         }
     }).catch(function() {});
 }
@@ -736,6 +757,12 @@ function init() {
                     <label>Rec codec</label>
                     <select id="selRecCodec" style="width:115px" onchange="setRecCodec(this.value)">
                         <option value="">Loading...</option>
+                    </select>
+                </div>
+                <div class="setting" id="gpuRow" style="display:none">
+                    <label>Rec GPU</label>
+                    <select id="selRecGpu" style="width:115px" onchange="setRecGpu(this.value)">
+                        <option value="auto">Auto</option>
                     </select>
                 </div>
                 <div class="slider-row">
