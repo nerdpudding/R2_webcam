@@ -23,10 +23,11 @@ NerdCam is a fully local, no-cloud replacement for the Foscam R2's outdated offi
   │    ┌────┴────────────────────┴────┐        │
   │    │     HTTP Proxy Server        │        │
   │    │  :8088                       │        │
-  │    │  /api/mjpeg  /api/stream     │        │
-  │    │  /api/audio  /api/snap       │        │
-  │    │  /api/cam    /api/record     │        │
-  │    │  /api/patrol /api/settings   │        │
+  │    │  /api/mjpeg  /api/fmp4       │        │
+  │    │  /api/stream /api/audio      │        │
+  │    │  /api/snap   /api/cam        │        │
+  │    │  /api/record /api/patrol     │        │
+  │    │  /api/settings               │        │
   │    └────────────┬─────────────────┘        │
   │                 │                           │
   └─────────────────┼───────────────────────────┘
@@ -70,13 +71,13 @@ NerdCam Application
 │  └──────────────┘   └──────────┬────────────┘     │
 │                                │                  │
 │  ┌─────────────────────────────┴───────────────┐  │
-│  │ Stream Engine                               │  │
-│  │ ┌─────────────┐  ┌───────────┐  ┌────────┐ │  │
-│  │ │ MJPEG src   │  │ Audio src │  │ AV src │ │  │
-│  │ │ (shared     │  │ (per-req  │  │ (per-  │ │  │
-│  │ │  ffmpeg)    │  │  ffmpeg)  │  │  req)  │ │  │
-│  │ └─────────────┘  └───────────┘  └────────┘ │  │
-│  └─────────────────────────────────────────────┘  │
+│  │ Stream Engine                                        │  │
+│  │ ┌─────────────┐  ┌───────────┐  ┌────────┐ ┌──────┐ │  │
+│  │ │ MJPEG src   │  │ fMP4 src  │  │ AV src │ │Audio │ │  │
+│  │ │ (shared     │  │ (per-req  │  │ (per-  │ │(per- │ │  │
+│  │ │  ffmpeg)    │  │  ffmpeg)  │  │  req)  │ │ req) │ │  │
+│  │ └─────────────┘  └───────────┘  └────────┘ └──────┘ │  │
+│  └──────────────────────────────────────────────────────┘  │
 │                                                  │
 │  ┌──────────────┐   ┌──────────────┐             │
 │  │ Config Mgr   │   │ Recorder     │             │
@@ -89,13 +90,13 @@ NerdCam Application
 
 ## Input/Output Design
 
-| Feature | MVP (current) | Later |
-|---------|--------------|-------|
-| Video input | RTSP H.264 from camera | Same |
-| Video output (browser) | MJPEG via `<img>` tag | MSE/WebRTC for synced A/V |
+| Feature | Current | Later |
+|---------|---------|-------|
+| Video input | RTSP H.264 from camera (TCP default) | Same |
+| Video output (browser) | Hybrid: MJPEG `<img>` (mic off, ~1s) / MSE fMP4 `<video>` (mic on, ~3-3.5s synced A/V) | WebRTC for lower latency |
 | Video output (NerdPudding) | HTTP MJPEG `/api/mjpeg` (custom boundary parser) | Possibly RTSP relay (if NerdPudding adds reconnect) |
-| Audio output (browser) | Separate MP3 `<Audio>` | Combined with video stream |
-| A/V output (VLC) | MPEG-TS `/api/stream` | Lower latency options |
+| Audio output (browser) | Combined with video via MSE/fMP4 (synced) | — |
+| A/V output (VLC) | MPEG-TS `/api/stream` or fMP4 `/api/fmp4` | Lower latency options |
 | Recording | Local MP4 (NVENC/SW) | Network drive storage |
 | Image preprocessing | None | Lighting/contrast for NerdPudding |
 | Platform | x86 Linux | Raspberry Pi support |
@@ -140,7 +141,7 @@ NerdCam Application
 4. **AI feed** — Provide reliable MJPEG stream to NerdPudding for AI processing
 
 ### Secondary
-5. **Audio monitoring** — Listen to camera mic (synced with video — requires architectural change)
+5. **Audio monitoring** — Listen to camera mic (synced with video via MSE/fMP4 hybrid)
 6. **Multi-app streaming** — Multiple applications consuming the proxy simultaneously
 7. **Remote-ish access** — Access from any device on the LAN via browser
 

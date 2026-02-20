@@ -159,6 +159,7 @@ MSE engine with these functions:
 3. Wait for 275s timeout — auto-reconnects
 4. Test in Firefox — works or falls back cleanly
 5. Latency target: < 2s total for both video and audio
+   **Outcome:** ~3-3.5s achieved. The <2s target was not feasible with fMP4/MSE — inherent pipeline latency (fragmentation + browser buffering). Accepted as trade-off: synced A/V at ~3-3.5s is better than desynced at ~1s video + ~5s audio.
 
 ---
 

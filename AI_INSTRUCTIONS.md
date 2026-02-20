@@ -88,14 +88,20 @@ NerdPudding is a separate AI processing app that consumes `/api/mjpeg` as its ca
 
 **Rule**: Any streaming architecture changes (MSE/WebRTC for Use Case 1) must leave `/api/mjpeg` completely untouched for Use Case 2.
 
+### Streaming Architecture (post-Sprint 1)
+- **Hybrid web viewer** — Mic OFF: MJPEG `<img>` (~1s latency, fast). Mic ON: MSE/fMP4 `<video>` (~3-3.5s latency, synced A/V). Auto-switches. Fallback to MJPEG if browser doesn't support MSE.
+- **`/api/fmp4` endpoint** — H.264 copy + AAC 128k in fragmented MP4. Per-client ffmpeg process. Used internally by web viewer MSE engine when mic is enabled.
+- **TCP default transport** — UDP post-timeout restarts failed 1-4 times. TCP has zero failures, reliable first-attempt recovery.
+- **A/V sync: resolved** — MSE/fMP4 provides inherently synchronized audio and video from a single ffmpeg process. Trade-off: ~3-3.5s latency vs MJPEG's ~1s video-only.
+
 ### Known Architectural Limitations
-- **A/V desync in browser** — video (`<img>` MJPEG, ~1s latency) and audio (`<Audio>` MP3, ~5s latency) are separate streams. Cannot be synced without architectural change (WebRTC/MSE/HLS). Only affects Use Case 1.
-- **Camera RTSP timeout** — Foscam R2 drops RTSP sessions every ~275s. Auto-recovery works but total visible freeze is ~7s (5s stale detection + 2s restart). Affects both use cases. RTSP keepalive may prevent this.
+- **Camera RTSP timeout** — Foscam R2 (firmware 2.71.1.81, final version) drops RTSP every ~275s. Confirmed unfixable: OPTIONS returns 501, GET_PARAMETER ignored, no CGI setting, no firmware update (end-of-life April 2022). Auto-recovery: ~4s total freeze (2s stale detection + 2s restart). TCP recovery is reliable on first attempt.
 - **MJPEG re-encodes** — `/api/mjpeg` transcodes H.264 to MJPEG, losing quality. By design for browser compatibility and NerdPudding's JPEG-native pipeline. Quality setting matters for AI inference.
-- **Concurrent RTSP session limit** — Camera likely supports 2-3 simultaneous RTSP sessions. MJPEG source + audio + recording = 3 sessions. Untested whether camera enforces a hard limit. MSE architecture (single combined A/V session) would reduce this.
+- **Concurrent RTSP session limit** — Camera returns "453 Not Enough Bandwidth" when too many sessions open. Typical usage: 1 shared MJPEG source + 1 fMP4 per browser client (when mic on) + recording = 3 sessions. Mic gain uses Apply button (not live slider) to avoid session exhaustion.
+- **MSE latency** — ~3-3.5s is inherent to the fMP4/MSE pipeline (fragmentation, browser buffering). Cannot be reduced without switching to WebRTC. Acceptable trade-off for synced A/V.
 
 ### Current Priority
-Reduce A/V latency and improve sync — may require rethinking streaming architecture. Work happens in a separate development branch. `/api/mjpeg` must remain stable throughout.
+Sprint 1 is nearly complete — only PTZ preset Go buttons remain (save works, Go navigation may have name mismatch). Sprint 2 focuses on NerdPudding stream optimization, image preprocessing, and quality of life improvements. `/api/mjpeg` must remain stable throughout all changes.
 
 ## Plan Rules
 

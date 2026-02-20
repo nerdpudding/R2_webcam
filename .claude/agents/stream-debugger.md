@@ -13,7 +13,6 @@ Before doing anything else, read the following files in this exact order:
 1. `AI_INSTRUCTIONS.md` — project rules and key technical context (especially "Known Architectural Limitations")
 2. `docs/ISSUES_REPORT.md` — current known issues and their diagnosed root causes
 3. `docs/STREAM_ANALYSIS.md` — stream architecture, endpoints, latency measurements
-4. `docs/TROUBLESHOOTING_PLAN.md` — diagnostic steps taken and findings
 
 Then if investigating a specific issue, read relevant sections of:
 5. `nerdcam.py` — stream-related code (ffmpeg command building, MJPEG reader, proxy endpoints)
@@ -39,11 +38,10 @@ When information conflicts:
    - Identify where latency is introduced (camera, ffmpeg buffering, muxing, browser buffering)
 
 4. **Architecture evaluation** — assess streaming architecture options:
-   - Current: separate MJPEG video + MP3 audio (cannot sync)
-   - WebRTC: lowest latency, most complex
-   - MSE with fMP4: moderate complexity, good browser support
-   - HLS with short segments: simpler but adds segment latency
-   - RTSP relay: for credential-free RTSP passthrough
+   - Current: hybrid MJPEG (mic off) + MSE/fMP4 (mic on, synced A/V)
+   - WebRTC: lowest latency, most complex (not implemented)
+   - HLS with short segments: simpler but adds segment latency (not implemented)
+   - RTSP relay: for credential-free RTSP passthrough (Sprint 2)
 
 5. **Camera RTSP behavior** — understand Foscam R2 RTSP quirks: session timeout, keepalive support, transport options (UDP/TCP), concurrent session limits.
 
@@ -52,11 +50,20 @@ When information conflicts:
 ## Known Facts (do not re-diagnose)
 
 These have been confirmed through testing. Reference them, don't re-investigate:
-- Camera RTSP timeout: ~275 seconds, confirmed across 4+ cycles (see ISSUES_REPORT Issue 2)
-- Browser `<Audio>` buffer: ~5 seconds, inherent to browser MP3 streaming (Issue 1)
-- Web viewer MJPEG latency: ~1 second (lowest of all options)
-- UDP probesize fix: 32 → 32768 resolved unreliable startup (Issue 3, fixed)
-- `/api/stream` latency: ~3.5-4s both A/V, perfectly synced (MPEG-TS + VLC buffer)
+- Camera RTSP timeout: ~275 seconds, hardcoded firmware bug (firmware 2.71.1.81, end-of-life April 2022). OPTIONS returns 501, GET_PARAMETER ignored. Cannot be fixed.
+- RTSP keepalive: confirmed impossible — camera CGI has no timeout setting, ffmpeg has no keepalive option, out-of-band keepalive is not viable. Investigated 2026-02-20.
+- TCP is default transport: zero post-timeout restart failures. UDP still fails 1-4 times after each 275s timeout.
+- Stale detection threshold: 2 seconds. Total visible freeze: ~4s (2s detection + 2s restart).
+- Web viewer MJPEG latency (mic off): ~1 second (fastest option)
+- Web viewer MSE/fMP4 latency (mic on): ~3-3.5s, video and audio synced. Inherent to fMP4/MSE pipeline.
+- Hybrid streaming: MJPEG `<img>` when mic off, MSE `<video>` via `/api/fmp4` when mic on. Auto-switches.
+- `/api/fmp4` endpoint: H.264 copy + AAC 128k, fragmented MP4, `movflags frag_keyframe+empty_moov+default_base_moof`
+- Camera H.264 profile: High L4.0 (avc1.640028), not Main as originally assumed
+- UDP probesize fix: 32 → 32768 resolved unreliable startup (Issue 3), fully mitigated by TCP default
+- `/api/stream` latency: ~5s both A/V in VLC, perfectly synced (MPEG-TS + VLC buffer)
+- `/api/fmp4` latency in VLC: ~5s both A/V, similar to `/api/stream` (VLC buffering dominates)
+- PTZ preset parsing: fixed, reads all pointN keys. Go buttons still broken (name mismatch suspected).
+- Concurrent RTSP sessions: camera returns "453 Not Enough Bandwidth" when too many. Mic gain Apply button prevents session exhaustion.
 
 ## Report Format
 
