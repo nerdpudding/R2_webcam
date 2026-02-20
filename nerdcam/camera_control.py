@@ -286,20 +286,52 @@ def audio_menu(config):
             print("  Unknown option")
 
 
+def _get_stream_params(config, stream=0):
+    """Get current video stream parameters for a given stream index."""
+    data = cgi("getVideoStreamParam", config)
+    if data.get("result") != "0":
+        return None
+    s = str(stream)
+    return {
+        "streamType": s,
+        "resolution": data.get(f"resolution{s}", "0"),
+        "bitRate": data.get(f"bitRate{s}", "2097152"),
+        "frameRate": data.get(f"frameRate{s}", "25"),
+        "GOP": data.get(f"GOP{s}", "30"),
+        "isVBR": data.get(f"isVBR{s}", "1"),
+    }
+
+
+def _set_stream_param(config, stream=0, **overrides):
+    """Set video stream parameters. Reads current values first, applies overrides."""
+    params = _get_stream_params(config, stream)
+    if params is None:
+        print("  ERROR: could not read current stream parameters")
+        return False
+    params.update(overrides)
+    data = cgi("setVideoStreamParam", config, **params)
+    return ok(data, "setVideoStreamParam")
+
+
 def video_settings(config):
     print("\n--- Video Stream Settings ---")
-    print("\n  Main stream:")
-    data = cgi("getMainVideoStreamType", config)
-    if ok(data, "getMainVideoStreamType"):
-        show_dict(data)
-    print("\n  Sub stream:")
-    data = cgi("getSubVideoStreamType", config)
-    if ok(data, "getSubVideoStreamType"):
-        show_dict(data)
-    print("\n  Stream parameters:")
+
     data = cgi("getVideoStreamParam", config)
-    if ok(data, "getVideoStreamParam"):
-        show_dict(data)
+    if not ok(data, "getVideoStreamParam"):
+        return
+
+    # Show main stream (index 0) settings clearly
+    res_names = {"0": "720p", "1": "VGA", "3": "VGA 4:3", "7": "1080p", "9": "1536p"}
+    res = data.get("resolution0", "?")
+    br = int(data.get("bitRate0", "0"))
+    fr = data.get("frameRate0", "?")
+    gop = data.get("GOP0", "?")
+    vbr = "VBR" if data.get("isVBR0") == "1" else "CBR"
+
+    print(f"  Resolution:  {res_names.get(res, res)}")
+    print(f"  Bitrate:     {br // 1024} kbps ({vbr})")
+    print(f"  Framerate:   {fr} fps")
+    print(f"  GOP:         {gop} frames (keyframe every {int(gop) / max(int(fr), 1):.1f}s)")
 
     print("\n  Options:")
     print("  r=resolution  f=framerate  b=bitrate  k=keyframe interval")
@@ -310,22 +342,25 @@ def video_settings(config):
         if choice == "q":
             break
         elif choice == "r":
-            print("  Resolutions: 0=720p, 1=VGA, 2=QVGA, 3=1080p")
+            print("  Resolutions: 7=1080p, 0=720p, 1=VGA")
             val = input("  Resolution: ").strip()
-            data = cgi("setVideoStreamParam", config, resolution=val)
-            ok(data, "setVideoStreamParam")
+            _set_stream_param(config, resolution=val)
         elif choice == "f":
-            val = input("  Framerate (1-30): ").strip()
-            data = cgi("setVideoStreamParam", config, frameRate=val)
-            ok(data, "setVideoStreamParam")
+            val = input("  Framerate (5-25): ").strip()
+            _set_stream_param(config, frameRate=val)
         elif choice == "b":
-            val = input("  Bitrate (kbps, e.g. 2048): ").strip()
-            data = cgi("setVideoStreamParam", config, bitRate=val)
-            ok(data, "setVideoStreamParam")
+            print("  Bitrate in kbps: 512, 1024, 2048, 4096, 6144, 8192")
+            val = input("  Bitrate (kbps): ").strip()
+            try:
+                bits = int(val) * 1024
+                _set_stream_param(config, bitRate=str(bits))
+            except ValueError:
+                print("  Invalid number")
         elif choice == "k":
-            val = input("  Keyframe interval (GOP, e.g. 30): ").strip()
-            data = cgi("setVideoStreamParam", config, GOP=val)
-            ok(data, "setVideoStreamParam")
+            print("  GOP = frames between keyframes. Lower = better motion quality, more bandwidth.")
+            print("  Suggested: 10, 15, 20, 30")
+            val = input("  GOP: ").strip()
+            _set_stream_param(config, GOP=val)
         else:
             print("  Unknown option")
 

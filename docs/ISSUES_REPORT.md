@@ -130,4 +130,64 @@ Reducing NerdCam's stream contribution helps, but the majority of this latency s
 1. **PTZ preset Go buttons** — Save works, but Go buttons may not navigate to the correct position. Needs further investigation (name mismatch between save/goto CGI commands suspected).
 2. **275s RTSP timeout** — unfixable firmware limitation. Mitigated but not eliminated.
 3. **MSE latency ~3-3.5s** — inherent to fMP4/MSE pipeline. Acceptable trade-off for synced A/V.
-4. **Video settings CGI** — `setVideoStreamParam` with individual parameters (bitRate, GOP, etc.) returns result code -1. The camera may require all parameters at once, or the parameter names may need stream index suffixes (e.g. `bitRate0` instead of `bitRate`). Needs CGI API investigation to enable GOP/bitrate adjustment for better motion quality.
+4. **Video settings CGI** — Resolved (2026-02-20). `setVideoStreamParam` requires `streamType` + all parameters together. Fixed: reads current values first, applies override, sends complete parameter set. GOP and bitrate are now adjustable from the CLI.
+
+---
+
+## Foscam R2 V5 — Hardware Specifications (via ONVIF)
+
+Queried via `tools/onvif_probe.py` using ONVIF `GetVideoEncoderConfigurationOptions`.
+Firmware: 2.71.1.81, Hardware: 1.11.1.13.
+
+### Main stream (prof0)
+| Parameter | Min | Max | Current |
+|---|---|---|---|
+| Resolution | 320x240 | 1920x1080 | 1920x1080 |
+| Bitrate | 20 kbps | **4096 kbps** | 4096 kbps (maximum) |
+| Framerate | 1 fps | 30 fps | 20 fps (optimal) |
+| GOP (keyframe interval) | 10 | 100 | 20 (= framerate, optimal) |
+| H.264 profile | — | — | Main (ONVIF reports Baseline but camera sends High L4.0) |
+
+### Sub stream (prof1)
+| Parameter | Min | Max | Current |
+|---|---|---|---|
+| Resolution | 320x240 | 1280x720 | 1280x720 |
+| Bitrate | 20 kbps | 4096 kbps | 512 kbps |
+| Framerate | 1 fps | 15 fps | 11 fps |
+| GOP | 10 | 100 | 15 |
+
+### Supported resolutions
+320x240, 640x360, 640x480, 1280x720, 1920x1080
+
+### Optimal settings for best image quality
+
+The camera has a fixed maximum bitrate of 4096 kbps. This budget must be distributed across all frames. The key trade-offs:
+
+**GOP (keyframe interval):**
+- I-frames (keyframes) are large and consume significant bandwidth
+- Too low GOP (e.g. 10) = too many I-frames, starving P-frames of bandwidth → worse blocking artifacts between keyframes
+- Too high GOP (e.g. 100) = long time between keyframes → trailing artifacts accumulate during motion, slow recovery after stream reconnect
+- **Optimal: GOP = framerate** (1 keyframe per second). Balances quality and recovery time.
+
+**Framerate:**
+- Higher FPS = same 4 Mbps spread over more frames = less data per frame = more compression artifacts
+- Lower FPS = more data per frame = sharper image quality
+- **20 fps is the sweet spot** — visually smooth, each frame gets 20% more data than at 25 fps
+
+**VBR (Variable Bit Rate):**
+- Should be **on** (isVBR=1). Lets the camera allocate more bits during motion and save bits during still scenes.
+
+**Recommended settings (main stream):**
+
+| Parameter | Value | Reason |
+|---|---|---|
+| Resolution | 1920x1080 | Maximum supported |
+| Bitrate | 4096 kbps (4194304 bps) | Hardware maximum |
+| Framerate | 20 fps | More bits per frame than 25fps |
+| GOP | 20 | = framerate, 1 keyframe/second |
+| VBR | On | Efficient bandwidth allocation |
+
+These settings are applied via the camera CGI (`setVideoStreamParam`) and persist on the camera — they don't need to be set on every app start. Adjustable via Advanced → Video settings in the CLI.
+
+### CGI API note
+The CGI API (`setVideoStreamParam`) expects bitrate in **bits per second** (e.g. `4194304` = 4096 kbps). The ONVIF API reports in **kbps**. The camera internally clamps values to the hardware maximum — it does not return an error for out-of-range values, it silently caps them.

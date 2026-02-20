@@ -29,19 +29,47 @@
 - [ ] Merge dev → main after refactor complete
 - [ ] Full regression test
 
-## Sprint 3: Features + Platform
+## Sprint 3: WebRTC + Features
 
-**Goal:** Build new features on the clean modular codebase.
+**Goal:** Replace fMP4/MSE with WebRTC for ultra-low latency synced A/V in browser. Build new features on the modular codebase.
 
+### go2rtc integration (primary goal)
+go2rtc solves three problems at once: WebRTC, RTSP relay, and 2-way audio.
+- [ ] Evaluate go2rtc as RTSP → WebRTC bridge
+  - Must support H.264 passthrough (no re-encoding) — critical for Pi 4
+  - Test H.264 High profile (avc1.640028) compatibility in browsers
+  - Single binary, no heavy dependencies, Docker optional
+  - AlexxIT has reverse-engineered Foscam's proprietary 2-way audio protocol
+- [ ] Replace fMP4/MSE path with WebRTC in web viewer
+  - Target: <500ms synced A/V in browser (vs current ~3s)
+  - MJPEG path stays for NerdPudding (needs JPEG frames, not video)
+  - Fallback to fMP4/MSE if WebRTC fails (older browsers)
+- [ ] Credential-free RTSP relay endpoint (via go2rtc)
+  - Future-proofs NerdPudding RTSP input option
+- [ ] 2-way audio — speaker control via go2rtc
+  - Foscam uses proprietary protocol (HTTP POST with G.711a PCM chunks, not ONVIF Profile T)
+  - go2rtc handles the protocol translation, exposes standard WebRTC backchannel
+  - Enables browser-based talk-back without touching Foscam's audio API directly
+- [ ] Watch concurrent RTSP session limit — go2rtc bridge adds a session
+
+### Features
 - [ ] NerdPudding stream optimization — reduce latency contribution to end-to-end pipeline
 - [ ] Image preprocessing pipeline (lighting/contrast adjustments before streaming to NerdPudding)
-- [ ] Credential-free RTSP relay endpoint (future-proofing for NerdPudding RTSP input)
 - [ ] PTZ patrol improvements
 - [ ] Improve error messages and recovery feedback in web UI (frontend)
-- [ ] Raspberry Pi compatibility testing
-- [ ] Software-only recording fallback testing on low-power hardware
-- [ ] Optimize resource usage for low-power hardware
+- [x] Fix video settings CGI — required all params + streamType together, GOP/bitrate now adjustable
 - [ ] Consider alternative camera models / generic ONVIF support
+
+## Sprint 4: Raspberry Pi 4
+
+**Goal:** Run NerdCam on Raspberry Pi 4 as a dedicated always-on appliance.
+
+- [ ] Pi 4 compatibility testing (Python 3, ffmpeg, go2rtc/mediamtx)
+- [ ] Verify H.264 passthrough works (no re-encoding needed)
+- [ ] Software-only recording fallback (no NVENC on Pi)
+- [ ] Optimize resource usage (memory, CPU, thermals)
+- [ ] Systemd service for auto-start
+- [ ] Consider separate lightweight Pi build or same codebase with Pi-specific config
 
 ## Status
 
@@ -49,7 +77,8 @@
 |--------|--------|-------|
 | 1 | Complete | All items done. PTZ Go bug moved to Sprint 2. |
 | 2 | Near complete | Refactor done. PTZ Go bug and regression test remaining, then merge to main. |
-| 3 | Planned | After Sprint 2 codebase is solid |
+| 3 | Planned | WebRTC (go2rtc/mediamtx), features. After Sprint 2 merge. |
+| 4 | Planned | Raspberry Pi 4 dedicated appliance build |
 
 ## Completed
 
