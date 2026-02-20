@@ -61,11 +61,16 @@ go2rtc solves three problems at once: WebRTC, RTSP relay, and 2-way audio.
 - [ ] Watch concurrent RTSP session limit — go2rtc bridge adds a session
 
 ### Features
-- [ ] NerdPudding stream optimization — reduce latency contribution to end-to-end pipeline
-- [ ] Image preprocessing pipeline (lighting/contrast adjustments before streaming to NerdPudding)
-- [ ] PTZ Go bug — fix preset name mismatch between save/goto CGI commands (needs camera testing)
-- [ ] Improve error messages and recovery feedback in web UI (frontend)
+- [ ] Image/stream optimization for NerdPudding
+  - Auto-adjust camera settings (brightness, contrast, etc.) via algorithms that detect suboptimal conditions and use CGI to correct in real-time
+  - Investigate server-side postprocessing (ffmpeg filters, frame enhancement) before serving to NerdPudding
+  - Research what's possible vs. what the camera can already handle natively — limitations will become clearer over time
 - [x] Fix video settings CGI — required all params + streamType together, GOP/bitrate now adjustable
+- [x] Improve error messages and recovery feedback (structured JSON errors, stream state tracking, auto-reconnect)
+- [x] PTZ preset save/goto fix (delete-before-add with 1s delay)
+- [ ] Scheduled/timed recordings — automated recording on a schedule (time-of-day, duration)
+- [ ] Sliding window recording — continuous recording with auto-cleanup of old files (fixed disk budget)
+  - Could also be a simple cron job on Pi 4 instead of in-app logic — evaluate when Pi deployment is closer
 - [ ] Consider alternative camera models / generic ONVIF support
 
 ## Sprint 4: Raspberry Pi 4
