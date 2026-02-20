@@ -4,6 +4,18 @@ A custom Python tool for controlling and streaming from a **Foscam R2** IP camer
 
 Built as a replacement for the official Foscam Android/PC apps which are outdated and depend on cloud services. NerdCam gives you full control through a simple CLI and an optional web viewer, while keeping your credentials encrypted locally.
 
+## Do You Need This?
+
+**If you just want to watch the stream on your phone or PC** — you probably don't need NerdCam. Apps like TinyCam, VLC, or any ONVIF client can connect directly to the camera's RTSP stream (or via ONVIF on port 888) and give you live video, PTZ control, and even 2-way audio. That works fine and may actually have lower latency than a proxy-based setup.
+
+**NerdCam exists for specific reasons:**
+- **Proxy architecture** — credential-free local endpoints (`/api/mjpeg`, `/api/fmp4`, `/api/snap`) that any app on your LAN can consume without knowing the camera password. This is the core of the [NerdPudding](https://github.com/nerdpudding) integration (AI processing that needs an MJPEG feed).
+- **Session management** — the Foscam R2 chokes on multiple concurrent RTSP sessions. NerdCam serves N clients from a single shared ffmpeg process.
+- **Server-side features** — PTZ patrol, scheduled recording, and stream auto-recovery run as background services, independent of any viewer or client.
+- **Full control without cloud** — every camera setting (image, video encoding, motion detection, OSD, network) accessible from CLI and web UI, with encrypted local config. No accounts, no internet required.
+
+If none of that matters to you, a direct RTSP connection with VLC or TinyCam is simpler and works great.
+
 ## Table of Contents
 
 - [Requirements](#requirements)
