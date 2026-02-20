@@ -130,7 +130,14 @@ Reducing NerdCam's stream contribution helps, but the majority of this latency s
 1. **PTZ preset Go buttons** — Save works, but Go buttons may not navigate to the correct position. Needs further investigation (name mismatch between save/goto CGI commands suspected).
 2. **275s RTSP timeout** — unfixable firmware limitation. Mitigated but not eliminated.
 3. **MSE latency ~3-3.5s** — inherent to fMP4/MSE pipeline. Acceptable trade-off for synced A/V.
-4. **Video settings CGI** — Resolved (2026-02-20). `setVideoStreamParam` requires `streamType` + all parameters together. Fixed: reads current values first, applies override, sends complete parameter set. GOP and bitrate are now adjustable from the CLI.
+4. **Firefox XML Parsing Error** — Firefox console shows `XML Parsing Error: not well-formed, nerdcam.html:1:1` when loading the web viewer. Root cause unknown. Attempted fix: removed empty `src=""` attribute from `<img>` tag and switched to `removeAttribute("src")` for clearing images — did not resolve the issue. Does not affect functionality.
+5. **Frontend code quality** — The JavaScript in `nerdcam_template.html` has accumulated complexity across sprints and needs a cleanup pass. Form fields are missing `id`/`name` attributes, causing Chromium/Brave console warnings.
+
+---
+
+## Resolved Issues
+
+1. **Video settings CGI** — Resolved (2026-02-20). `setVideoStreamParam` requires `streamType` + all parameters together. Fixed: reads current values first, applies override, sends complete parameter set. GOP and bitrate are now adjustable from Settings → Camera → Video encoding.
 
 ---
 
@@ -189,7 +196,7 @@ The camera has a fixed maximum bitrate of 4096 kbps. This budget must be distrib
 | GOP | 20 | = framerate, 1 keyframe/second |
 | CBR | isVBR=0 | Full bitrate always ready, no motion ramp-up delay |
 
-These settings are applied via the camera CGI (`setVideoStreamParam`) and persist on the camera — they don't need to be set on every app start. Adjustable via Advanced → Video settings in the CLI.
+These settings are applied via the camera CGI (`setVideoStreamParam`) and persist on the camera — they don't need to be set on every app start. Adjustable via Settings → Camera → Video encoding in the CLI.
 
 ### CGI API note
 The CGI API (`setVideoStreamParam`) expects bitrate in **bits per second** (e.g. `4194304` = 4096 kbps). The ONVIF API reports in **kbps**. The camera internally clamps values to the hardware maximum — it does not return an error for out-of-range values, it silently caps them.

@@ -16,7 +16,7 @@ Before doing anything else, read the following files in this exact order:
 
 Then if investigating a specific issue, read relevant sections of:
 5. `nerdcam/streaming.py` — MjpegSource class (shared ffmpeg MJPEG source, stale detection, restart logic)
-6. `nerdcam/server.py` — proxy endpoint handlers (fMP4, MJPEG, audio, stream, snap routes)
+6. `nerdcam/server.py` — proxy endpoint handlers (fMP4, MJPEG, audio, snap routes)
 7. `nerdcam/recording.py` — Recorder class and codec detection
 8. `nerdcam_template.html` — browser-side stream handling (video/audio elements, reconnect logic)
 9. `nerdcam.log` — runtime events (if the file exists and is relevant)

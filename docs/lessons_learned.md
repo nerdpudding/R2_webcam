@@ -4,6 +4,66 @@ Ongoing log of what worked and what didn't during development. Primarily intende
 
 ---
 
+## Chromium/Brave MJPEG `<img>` behavior differs from Firefox
+
+**Lesson:** MJPEG streams in `<img>` tags behave differently across browsers. Firefox fires `onload` per MJPEG frame. Chromium/Brave fires `onload` once on initial load, then never again. Chromium/Brave also fires `onerror` spuriously (e.g. when the stream is healthy). A browser-agnostic approach (server-side watchdog polling) is required for reliable disconnect/reconnect detection.
+
+**Example (Sprint 2):** Initial MJPEG disconnect detection relied on `onerror` events, which worked in Firefox but produced false positives in Chromium/Brave. Replaced with a periodic server watchdog (8s interval) that checks server availability via `/api/settings`.
+
+**Rule:** Don't rely on browser-specific MJPEG `<img>` events. Use a server health check for stream state detection.
+
+---
+
+## Foscam CGI `setVideoStreamParam` requires all parameters together
+
+**Lesson:** The Foscam R2 CGI command `setVideoStreamParam` silently ignores requests that don't include both `streamType` AND all parameters together. Sending only the changed parameter does nothing — the camera simply doesn't apply it.
+
+**Example (Sprint 2):** Attempts to change only the bitrate via `setVideoStreamParam&bitRate=4194304` were silently ignored. The fix reads all current values first (`getVideoStreamParam`), applies the override, then sends the complete parameter set.
+
+**Rule:** Always read current camera values first, then send a complete parameter set for CGI commands that control multiple related settings.
+
+---
+
+## Foscam CGI bitRate is bits/second, ONVIF reports kbps
+
+**Lesson:** The Foscam CGI API expects `bitRate` in **bits per second** (e.g. `4194304` for 4 Mbps). The ONVIF API reports the same value in **kilobits per second** (e.g. `4096`). These are different units and confusing them will produce wrong results.
+
+**Rule:** When converting between CGI and ONVIF values, remember: CGI bps = ONVIF kbps × 1024.
+
+---
+
+## Server-side template rendering, not file generation
+
+**Lesson:** Generating an HTML file on disk (with credentials baked in) is the wrong approach. It creates a file with sensitive data, requires cleanup, and complicates git-ignoring. The correct approach is server-side rendering: read the template, substitute values in memory, serve the result per request. No file on disk, no credentials in static files.
+
+**Example (Sprint 2):** The original `generate_viewer()` function wrote `nerdcam.html` to disk with credentials embedded. Replaced with in-memory rendering in `server.py` — the template is read once per request, credentials are injected, and the result is served directly.
+
+**Rule:** Never write credentials or sensitive config to generated files. Use server-side rendering with in-memory substitution.
+
+---
+
+## HEAD requests need explicit handling in http.server
+
+**Lesson:** Python's `SimpleHTTPRequestHandler` only handles `HEAD` for static files it serves from disk. API routes handled in `do_GET` don't automatically get `HEAD` support. Browsers and monitoring tools send `HEAD` requests to check endpoint availability, and these will return 404 if not explicitly handled.
+
+**Example (Sprint 2):** The `_checkServer` function in the web viewer sent HEAD requests to `/api/settings` to check server availability, but the server returned 404 because `do_HEAD` wasn't implemented for API routes. Fixed by adding a `do_HEAD` handler that dispatches to the same route logic.
+
+**Rule:** When adding API endpoints to `http.server`, also handle `HEAD` requests if clients might probe for availability.
+
+---
+
+## Never set `img.src = ""` — use `removeAttribute("src")`
+
+**Lesson:** Setting `img.src = ""` causes the browser to make a request to the current page URL (treating "" as a relative URL). In Firefox, this triggers an XML parsing error because it tries to parse the HTML page as XML. Use `img.removeAttribute("src")` instead to clear an image element without side effects.
+
+**Example (Sprint 2):** Clearing the MJPEG `<img>` on server disconnect used `img.src = ""`, which caused `XML Parsing Error: not well-formed` in Firefox console. Switching to `removeAttribute("src")` eliminated that specific error, though a related Firefox XML error persists from another source (unresolved).
+
+**Rule:** To clear an `<img>` element, use `removeAttribute("src")`, never `src = ""`.
+
+---
+
+---
+
 ## All written output must be in English — no exceptions
 
 **Lesson:** The user communicates in Dutch, but every file written to disk must be in English. This includes plans, docs, summaries, comments, code, and commit messages. No Dutch documents, even if they are "user-friendly summaries."

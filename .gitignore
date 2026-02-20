@@ -4,7 +4,7 @@ config.enc
 # Plaintext config (deleted after first run, but just in case)
 config.json
 
-# Generated viewer with baked-in credentials
+# Legacy: viewer was previously generated on disk (now served in-memory by the server)
 nerdcam.html
 
 # Snapshots

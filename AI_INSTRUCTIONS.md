@@ -52,7 +52,7 @@ R2_webcam/
 │   ├── patrol.py               # PatrolController class (PTZ cycling)
 │   ├── ptz.py                  # PTZ menus, presets, patrol config
 │   └── server.py               # HTTP proxy server + route dispatcher
-├── nerdcam_template.html       # Web viewer HTML/JS template (→ nerdcam.html at runtime, git-ignored)
+├── nerdcam_template.html       # Web viewer HTML/JS template (served in-memory per request by the proxy server)
 ├── config.example.json         # Example config structure for reference
 ├── config.enc                  # Encrypted credentials (git-ignored)
 ├── nerdcam.log                 # Runtime log (git-ignored)
@@ -69,6 +69,9 @@ R2_webcam/
 │   └── lessons_learned.md      # What worked and didn't (context for AI assistants)
 │
 ├── recordings/                 # Local recording output (git-ignored)
+│
+├── tools/                      # Standalone utility scripts (not part of the app package)
+│   └── onvif_probe.py          # ONVIF capability query tool (queries camera hardware specs via WS-Security)
 │
 ├── claude_plans/               # Active plans from plan mode
 │
