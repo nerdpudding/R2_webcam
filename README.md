@@ -94,7 +94,7 @@ The settings menu is organized into submenus:
 
 | Option | Feature | What it does |
 |--------|---------|-------------|
-| **1** | PTZ control | Pan, tilt, and zoom using a numpad-style layout (7=up-left, 8=up, 9=up-right, etc.). Manage speed, 4 preset positions, and automated patrol |
+| **1** | PTZ control | Pan, tilt, and zoom using a numpad-style layout (7=up-left, 8=up, 9=up-right, etc.). Manage speed, named presets (Go/Save/Delete), and automated patrol |
 | **2** | Image settings | Adjust brightness, contrast, saturation, sharpness (0-100 range). Toggle mirror and flip |
 | **3** | Infrared / night vision | Switch between auto mode (IR follows ambient light), force IR on, or force IR off |
 | **4** | Video encoding | Change resolution (1080p, 720p, VGA, QVGA), framerate (1-30 FPS), bitrate, keyframe interval (GOP), VBR/CBR mode. Changes apply instantly |
@@ -137,11 +137,11 @@ Patrol config is stored in the encrypted config file and persists between sessio
 
 Start the server (option **1** from the main menu) and open the viewer URL shown inline (`http://localhost:8088/nerdcam.html`). The web viewer provides:
 
-- **Hybrid live stream** - MJPEG video (mic off, ~1s latency) or MSE/fMP4 synced audio+video (mic on, ~3-3.5s latency). Automatic switching, with MSE fallback to MJPEG for unsupported browsers. State tracking (CONNECTING / LIVE / RECONNECTING / STOPPED)
-- **Pan/Tilt controls** - Arrow buttons to move the camera, configurable PTZ duration and speed, preset positions (Go/Save), automated patrol with H:M:S time config, live position indicators, progress bar, and countdown
+- **Hybrid live stream** - MJPEG video (mic off, ~1s latency) or MSE/fMP4 synced audio+video (mic on, ~3-3.5s latency). Automatic switching, with MSE fallback to MJPEG for unsupported browsers. State tracking (CONNECTING / LIVE / RECONNECTING / DISCONNECTED / STOPPED)
+- **Pan/Tilt controls** - Arrow buttons to move the camera, configurable speed, preset positions (Go/Save), automated patrol with H:M:S time config, live position indicators, progress bar, and countdown
 - **Infrared toggle** - Auto, force on, force off
 - **Image adjustments** - Brightness, contrast, saturation, sharpness sliders, mirror/flip
-- **Video settings** - Resolution, framerate, bitrate controls
+- **Video settings** - Resolution, framerate, bitrate controls, RTSP transport (UDP/TCP)
 - **Audio** - Enable/disable mic (switches to synced A/V stream), adjustable gain (1.0-5.0x) with Apply button
 - **OSD overlay** - Toggle timestamp and camera name overlay, set device name
 - **Recording** - Start/stop local recording with selectable quality preset (auto-detected from available encoders)
@@ -234,7 +234,7 @@ Key docs:
 | File / Directory | Purpose |
 |------------------|---------|
 | `nerdcam.py` | Thin launcher — `python3 nerdcam.py` entry point (imports `nerdcam.cli`) |
-| `nerdcam/` | Main application package (12 modules: cli, server, streaming, recording, patrol, ptz, camera_control, config, state, crypto, camera_cgi, + __init__ / __main__) |
+| `nerdcam/` | Main application package (11 modules + __init__ + __main__: cli, server, streaming, recording, patrol, ptz, camera_control, config, state, crypto, camera_cgi) |
 | `nerdcam_template.html` | HTML/JS template for the web viewer |
 | `config.example.json` | Example config structure (copy to `config.json` to pre-fill defaults, or just run the app) |
 | `recordings/` | Local recording output directory (created automatically, git-ignored) |

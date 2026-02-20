@@ -107,7 +107,7 @@ NerdCam Application
 | Language | Python 3 stdlib only | No pip dependencies, runs anywhere |
 | Streaming | ffmpeg subprocess | Handles RTSP, transcoding, muxing |
 | Web server | `http.server` stdlib | No external web framework needed |
-| Credential storage | PBKDF2+AES encryption | Secure, no external service |
+| Credential storage | PBKDF2 + XOR cipher | Secure, no external service, no pip deps |
 | MJPEG architecture | Single shared ffmpeg | Efficient: one process serves N clients |
 | Recording codec | Auto-detected NVENC/SW | Uses GPU if available, falls back gracefully |
 | Camera protocol | CGI API + RTSP | Foscam R2 native interface, no cloud |
@@ -127,7 +127,7 @@ NerdCam Application
 | Resource | Location | Purpose |
 |----------|----------|---------|
 | nerdcam.py | Project root | Thin launcher (imports `nerdcam.cli.main`) |
-| nerdcam/ | Project root | Main application package (12 modules) |
+| nerdcam/ | Project root | Main application package (11 modules + __init__ + __main__) |
 | nerdcam_template.html | Project root | Web viewer template |
 | Foscam CGI API | Camera firmware | Control protocol (no official docs) |
 | NerdPudding | Separate project | AI app consuming `/api/mjpeg` |
@@ -147,4 +147,4 @@ NerdCam Application
 
 ## Development Approach
 
-Iterative hobby project using sprint-based planning (see `roadmap.md`). SOLID/DRY/KISS principles. Sprint 2 refactored the monolith into the `nerdcam/` package (12 modules, AppState dataclass). New features (NerdPudding optimization, image preprocessing, RTSP relay) are built on this clean codebase in Sprint 3.
+Iterative hobby project using sprint-based planning (see `roadmap.md`). SOLID/DRY/KISS principles. Sprint 2 refactored the monolith into the `nerdcam/` package (11 modules + __init__/__main__, AppState dataclass). New features (NerdPudding optimization, image preprocessing, RTSP relay) are built on this clean codebase in Sprint 3.
