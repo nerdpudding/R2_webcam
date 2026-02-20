@@ -335,6 +335,7 @@ def video_settings(config):
 
     print("\n  Options:")
     print("  r=resolution  f=framerate  b=bitrate  k=keyframe interval")
+    print("  v=toggle VBR/CBR")
     print("  q=back")
 
     while True:
@@ -361,6 +362,20 @@ def video_settings(config):
             print("  Suggested: 10, 15, 20, 30")
             val = input("  GOP: ").strip()
             _set_stream_param(config, GOP=val)
+        elif choice == "v":
+            params = _get_stream_params(config)
+            if params is None:
+                print("  ERROR: could not read stream parameters")
+                continue
+            current = "VBR" if params["isVBR"] == "1" else "CBR"
+            new_val = "0" if params["isVBR"] == "1" else "1"
+            new_label = "CBR" if params["isVBR"] == "1" else "VBR"
+            print(f"  Current: {current}")
+            print(f"  VBR: variable bitrate, saves bandwidth during stillness, slower to react to motion")
+            print(f"  CBR: constant bitrate, always full bandwidth ready, better for fast motion")
+            confirm = input(f"  Switch to {new_label}? (y/n): ").strip().lower()
+            if confirm == "y":
+                _set_stream_param(config, isVBR=new_val)
         else:
             print("  Unknown option")
 

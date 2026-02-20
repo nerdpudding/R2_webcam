@@ -146,6 +146,7 @@ Firmware: 2.71.1.81, Hardware: 1.11.1.13.
 | Bitrate | 20 kbps | **4096 kbps** | 4096 kbps (maximum) |
 | Framerate | 1 fps | 30 fps | 20 fps (optimal) |
 | GOP (keyframe interval) | 10 | 100 | 20 (= framerate, optimal) |
+| Bitrate mode | CBR (0) / VBR (1) | — | CBR (isVBR=0, best for motion) |
 | H.264 profile | — | — | Main (ONVIF reports Baseline but camera sends High L4.0) |
 
 ### Sub stream (prof1)
@@ -174,8 +175,9 @@ The camera has a fixed maximum bitrate of 4096 kbps. This budget must be distrib
 - Lower FPS = more data per frame = sharper image quality
 - **20 fps is the sweet spot** — visually smooth, each frame gets 20% more data than at 25 fps
 
-**VBR (Variable Bit Rate):**
-- Should be **on** (isVBR=1). Lets the camera allocate more bits during motion and save bits during still scenes.
+**VBR vs CBR:**
+- **CBR (isVBR=0) is recommended.** With VBR, the camera throttles bitrate during stillness. When sudden motion occurs, the encoder needs time to ramp up — causing trailing block artifacts during the transition. CBR keeps the full 4 Mbps ready at all times, so the encoder can handle motion immediately.
+- VBR saves bandwidth during still scenes but causes worse artifacts during sudden motion at 4 Mbps max.
 
 **Recommended settings (main stream):**
 
@@ -185,7 +187,7 @@ The camera has a fixed maximum bitrate of 4096 kbps. This budget must be distrib
 | Bitrate | 4096 kbps (4194304 bps) | Hardware maximum |
 | Framerate | 20 fps | More bits per frame than 25fps |
 | GOP | 20 | = framerate, 1 keyframe/second |
-| VBR | On | Efficient bandwidth allocation |
+| CBR | isVBR=0 | Full bitrate always ready, no motion ramp-up delay |
 
 These settings are applied via the camera CGI (`setVideoStreamParam`) and persist on the camera — they don't need to be set on every app start. Adjustable via Advanced → Video settings in the CLI.
 
