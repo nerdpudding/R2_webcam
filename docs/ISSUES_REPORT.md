@@ -78,19 +78,11 @@ With TCP as default, this issue is fully resolved. UDP is still available as an 
 
 ---
 
-## Issue 4: `/api/stream` Latency (~3.5-4 seconds)
+## Issue 4: `/api/stream` Endpoint
 
-**Status:** Diagnosed — acceptable for its use case, not fixable without architectural change
-**Priority:** Low
+**Status:** Removed (2026-02-20) — redundant, replaced by `/api/fmp4`
 
-### Symptom
-The combined A/V stream (`/api/stream`) has ~3.5-4 second latency for both video and audio in VLC. They are perfectly synced with each other.
-
-### Root cause
-MPEG-TS muxing overhead + VLC's own buffering. The stream itself is efficient (H.264 copy, no re-encode), but the MPEG-TS container and VLC's buffer add latency. ffmpeg's `-muxdelay 0 -muxpreload 0` flags are already applied.
-
-### Notes
-This endpoint is primarily for situations where A/V sync matters more than latency (e.g. reviewing a scene, casual monitoring). For real-time low-latency viewing, the web viewer's MJPEG is better. For NerdPudding, `/api/mjpeg` is the correct endpoint.
+The MPEG-TS endpoint was superseded by `/api/fmp4` (fMP4) which serves the same purpose (synced A/V, H.264 copy + AAC) and works in all the same clients (VLC, ffplay, browser MSE). Removed to reduce unnecessary code.
 
 ---
 
@@ -102,8 +94,7 @@ This endpoint is primarily for situations where A/V sync matters more than laten
 | Web viewer MSE (mic on) | ~3-3.5s | ~3-3.5s | **Yes** | Hybrid: auto-switches when mic enabled |
 | `/api/mjpeg` in VLC | ~2s | — | — | VLC adds ~1s buffer |
 | `/api/mjpeg` in NerdPudding | ~7-10s end-to-end | — | — | See NerdPudding note below |
-| `/api/fmp4` in VLC | ~5s | ~5s | **Yes** | fMP4 stream, VLC buffering dominates |
-| `/api/stream` in VLC | ~5s | ~5s | **Yes** | MPEG-TS stream, similar to fMP4 in VLC |
+| `/api/fmp4` in VLC | ~3s | ~3s | **Yes** | Similar to browser MSE |
 
 ### NerdPudding end-to-end latency
 
@@ -139,3 +130,4 @@ Reducing NerdCam's stream contribution helps, but the majority of this latency s
 1. **PTZ preset Go buttons** — Save works, but Go buttons may not navigate to the correct position. Needs further investigation (name mismatch between save/goto CGI commands suspected).
 2. **275s RTSP timeout** — unfixable firmware limitation. Mitigated but not eliminated.
 3. **MSE latency ~3-3.5s** — inherent to fMP4/MSE pipeline. Acceptable trade-off for synced A/V.
+4. **Video settings CGI** — `setVideoStreamParam` with individual parameters (bitRate, GOP, etc.) returns result code -1. The camera may require all parameters at once, or the parameter names may need stream index suffixes (e.g. `bitRate0` instead of `bitRate`). Needs CGI API investigation to enable GOP/bitrate adjustment for better motion quality.

@@ -49,8 +49,7 @@ Both use cases should be able to run at the same time without degrading each oth
 | Endpoint | Format | Source | Description |
 |---|---|---|---|
 | `/api/mjpeg` | HTTP MJPEG | Shared ffmpeg process | RTSP → re-encode to MJPEG. One ffmpeg for all clients. Used by web viewer `<img>` (mic off) and NerdPudding |
-| `/api/fmp4` | Fragmented MP4 | Per-request ffmpeg | RTSP → H.264 copy + AAC 128k → fMP4. Per-client ffmpeg. Used by web viewer MSE engine (mic on) |
-| `/api/stream` | HTTP MPEG-TS | Per-request ffmpeg | RTSP → H.264 copy + AAC audio → MPEG-TS. New ffmpeg per client. Used by VLC |
+| `/api/fmp4` | Fragmented MP4 | Per-request ffmpeg | RTSP → H.264 copy + AAC 128k → fMP4. Per-client ffmpeg. Used by web viewer MSE engine (mic on), VLC, ffplay |
 | `/api/audio` | HTTP MP3 | Per-request ffmpeg | RTSP → extract audio → MP3. Legacy, superseded by MSE for synced A/V |
 | `/api/snap` | Single JPEG | Camera CGI | One-shot snapshot from camera |
 | Camera RTSP | RTSP H.264+audio | Direct from camera | `rtsp://user:pass@ip:88/videoMain` — native stream, requires credentials |
@@ -115,14 +114,14 @@ The `/api/fmp4` endpoint additionally uses:
 **Severity:** Low
 **Symptom:** The MJPEG endpoint re-encodes H.264 → MJPEG, losing some quality and adding CPU load.
 **Current understanding:** NerdPudding uses `/api/mjpeg` by design — its custom MJPEG reader with auto-reconnect is more robust than its RTSP/OpenCV path. Quality slider (1-10) controls inference accuracy.
-**Future:** Sprint 2 — credential-free RTSP relay if NerdPudding adds reconnect logic.
+**Future:** Sprint 3 — credential-free RTSP relay if NerdPudding adds reconnect logic.
 
-### Issue 4: `/api/stream` and `/api/fmp4` Latency in VLC
+### Issue 4: `/api/fmp4` Latency in VLC
 
 **Status:** Diagnosed — VLC buffering dominates, acceptable
 **Severity:** Low
-**Symptom:** Both `/api/stream` (MPEG-TS) and `/api/fmp4` (fragmented MP4) show ~5s latency in VLC with perfect A/V sync.
-**Cause:** VLC's own buffering dominates. Not configurable from server side. The `-muxdelay 0 -muxpreload 0 -flush_packets 1` flags are already applied.
+**Symptom:** `/api/fmp4` shows ~3s latency in VLC with perfect A/V sync. (`/api/stream` MPEG-TS endpoint was removed as redundant — fMP4 has equal or better latency.)
+**Cause:** fMP4 fragmentation settings allow lower latency than MPEG-TS did. VLC handles fMP4 well.
 **Note:** In the browser via MSE, `/api/fmp4` achieves ~3-3.5s (MSE buffer management with periodic live-edge chasing).
 
 ### Issue 5: Two Separate Stream Processes = No Sync
@@ -137,7 +136,7 @@ The `/api/fmp4` endpoint additionally uses:
 **Status:** By design
 **Severity:** Low (for Use Case 2)
 **Symptom:** The AI app would need camera credentials to connect directly to RTSP. The proxy exists specifically to avoid exposing credentials.
-**Future:** Sprint 2 — credential-free RTSP relay endpoint.
+**Future:** Sprint 3 — credential-free RTSP relay endpoint.
 
 ---
 
@@ -147,7 +146,7 @@ The `/api/fmp4` endpoint additionally uses:
 - TCP transport works after fixing probesize (was 32 bytes, now 500KB for TCP)
 - TCP vs UDP: no noticeable difference in video smoothness or latency on LAN
 - Stream stalls happen on both TCP and UDP — ruling out UDP packet loss
-- VLC `/api/stream`: ~3.5-4s latency with perfect A/V sync
+- VLC `/api/fmp4`: ~3s latency with perfect A/V sync
 - VLC `/api/mjpeg`: ~2s latency (VLC adds its own buffer)
 - Web viewer MJPEG: ~1s latency (fastest option)
 
@@ -156,7 +155,7 @@ The `/api/fmp4` endpoint additionally uses:
 - Stale threshold 2s: total freeze ~4s (was ~7s with 5s threshold)
 - RTSP keepalive: exhaustively investigated, confirmed impossible (firmware bug)
 - Camera firmware: 2.71.1.81, final version, end-of-life April 2022
-- `/api/fmp4` in VLC: ~5s latency, same as `/api/stream` (VLC buffering dominates)
+- `/api/fmp4` in VLC: ~3s latency, A/V synced (same as browser MSE)
 - `/api/fmp4` via MSE in browser: ~3-3.5s latency, A/V synced
 - Camera H.264 profile: High L4.0 (avc1.640028), confirmed via ffprobe
 - MSE aggressive per-chunk seeking: made things worse (choppy, no audio). Fixed with gentle periodic check every 3s.

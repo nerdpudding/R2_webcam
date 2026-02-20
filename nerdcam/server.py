@@ -167,10 +167,6 @@ def _make_handler(cam, cam_base, mjpeg, ctx):
                 self._handle_patrol(parsed)
                 return
 
-            if parsed.path == "/api/stream":
-                self._handle_stream()
-                return
-
             if parsed.path == "/api/fmp4":
                 self._handle_fmp4()
                 return
@@ -408,61 +404,6 @@ def _make_handler(cam, cam_base, mjpeg, ctx):
             elif action == "config":
                 result_with_status["config"] = result
             self._json_response(result_with_status)
-
-        def _handle_stream(self):
-            self.connection.settimeout(30)
-            rtsp_port = cam.get("port", 88)
-            rtsp_url = (f"rtsp://{cam['username']}:{cam['password']}"
-                        f"@{cam['ip']}:{rtsp_port}/videoMain")
-            self.send_response(200)
-            self.send_header("Content-Type", "video/mp2t")
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-            transport = ctx.get_rtsp_transport()
-            probe = "500000" if transport == "tcp" else "32768"
-            analyze = "500000" if transport == "tcp" else "0"
-            log.info("AV stream starting (transport=%s, client=%s)", transport, self.client_address[0])
-            proc = None
-            try:
-                proc = subprocess.Popen(
-                    ["ffmpeg",
-                     "-fflags", "+nobuffer+flush_packets",
-                     "-flags", "low_delay",
-                     "-probesize", probe,
-                     "-analyzeduration", analyze,
-                     "-rtsp_transport", transport,
-                     "-i", rtsp_url,
-                     "-c:v", "copy",
-                     "-c:a", "aac",
-                     "-f", "mpegts",
-                     "-muxdelay", "0",
-                     "-muxpreload", "0",
-                     "-flush_packets", "1",
-                     "pipe:1"],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
-                )
-                while True:
-                    chunk = proc.stdout.read(4096)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError, OSError):
-                log.info("AV stream disconnected")
-            except Exception as e:
-                log.error("AV stream error: %s", e)
-            finally:
-                if proc:
-                    try:
-                        err = proc.stderr.read().decode(errors="replace").strip()
-                        if err:
-                            lines = [l for l in err.splitlines() if l.strip()][-5:]
-                            log.warning("AV stream ffmpeg stderr:\n  %s", "\n  ".join(lines))
-                        proc.kill()
-                    except Exception:
-                        pass
 
         def _handle_fmp4(self):
             self.connection.settimeout(30)

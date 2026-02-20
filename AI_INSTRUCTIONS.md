@@ -37,8 +37,22 @@ NerdCam is a Python tool for controlling and streaming from a Foscam R2 IP camer
 R2_webcam/
 ├── AI_INSTRUCTIONS.md          # THIS FILE — AI rules, hierarchy, agents
 ├── README.md                   # User-facing overview, features, usage
-├── nerdcam.py                  # Main application (Python 3 + ffmpeg, ~2200 lines)
-├── nerdcam_template.html       # Web viewer HTML/JS template (→ nerdcam.html generated at runtime, git-ignored)
+├── nerdcam.py                  # Thin launcher (imports nerdcam.cli.main)
+├── nerdcam/                    # Main application package
+│   ├── __init__.py             # Package marker + version
+│   ├── __main__.py             # python3 -m nerdcam support
+│   ├── cli.py                  # Entry point, menus, main loop
+│   ├── state.py                # AppState dataclass, constants, paths
+│   ├── crypto.py               # Encrypt/decrypt config (PBKDF2 + XOR)
+│   ├── config.py               # Load/save config, settings, onboarding
+│   ├── camera_cgi.py           # CGI helpers: cgi(), ok(), show_dict()
+│   ├── camera_control.py       # Stateless camera menus (image, IR, audio, etc.)
+│   ├── streaming.py            # MjpegSource class (shared ffmpeg MJPEG source)
+│   ├── recording.py            # Recorder class + codec detection
+│   ├── patrol.py               # PatrolController class (PTZ cycling)
+│   ├── ptz.py                  # PTZ menus, presets, patrol config
+│   └── server.py               # HTTP proxy server + route dispatcher
+├── nerdcam_template.html       # Web viewer HTML/JS template (→ nerdcam.html at runtime, git-ignored)
 ├── config.example.json         # Example config structure for reference
 ├── config.enc                  # Encrypted credentials (git-ignored)
 ├── nerdcam.log                 # Runtime log (git-ignored)

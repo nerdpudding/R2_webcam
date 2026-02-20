@@ -183,8 +183,7 @@ When the server is running (options 1 or 2), these local URLs are available:
 | URL | Format | Use case |
 |-----|--------|----------|
 | `http://localhost:8088/api/mjpeg` | MJPEG (video only) | Browsers, OpenCV, NerdPudding, other apps that consume MJPEG |
-| `http://localhost:8088/api/fmp4` | Fragmented MP4 (video + audio) | MSE-capable browsers (used internally by web viewer when mic is enabled) |
-| `http://localhost:8088/api/stream` | MPEG-TS (video + audio) | VLC, ffplay, media players |
+| `http://localhost:8088/api/fmp4` | Fragmented MP4 (video + audio) | VLC, ffplay, browser MSE (web viewer with mic on) |
 | `http://localhost:8088/api/audio` | MP3 (audio only) | Browser audio playback (legacy, superseded by MSE for synced A/V) |
 | `http://localhost:8088/api/snap` | Single JPEG | Quick snapshot from any HTTP client |
 | `http://localhost:8088/api/settings` | JSON | Read/write app settings (mic gain, recording quality) |
@@ -196,7 +195,7 @@ These URLs require **no credentials** - the proxy adds them server-side. Any app
 
 ```bash
 # Examples
-vlc http://localhost:8088/api/stream
+vlc http://localhost:8088/api/fmp4
 ffplay http://localhost:8088/api/mjpeg
 ```
 
@@ -257,9 +256,10 @@ Key docs:
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `nerdcam.py` | Main application (Python 3 + ffmpeg) |
+| File / Directory | Purpose |
+|------------------|---------|
+| `nerdcam.py` | Thin launcher — `python3 nerdcam.py` entry point (imports `nerdcam.cli`) |
+| `nerdcam/` | Main application package (12 modules: cli, server, streaming, recording, patrol, ptz, camera_control, config, state, crypto, camera_cgi, + __init__ / __main__) |
 | `nerdcam_template.html` | HTML/JS template for the web viewer |
 | `config.example.json` | Example config structure (copy to `config.json` to pre-fill defaults, or just run the app) |
 | `recordings/` | Local recording output directory (created automatically, git-ignored) |

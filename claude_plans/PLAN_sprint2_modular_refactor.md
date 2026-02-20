@@ -184,7 +184,7 @@ The frontend (`nerdcam_template.html`) is coupled to these contracts. Everything
 | `/api/mjpeg` | multipart/x-mixed-replace, `--ffmpeg` boundary | **NerdPudding contract** |
 | `/api/fmp4` | fragmented MP4 | MSE browser engine |
 | `/api/audio` | MP3 stream | Legacy audio |
-| `/api/stream` | MPEG-TS | VLC/ffplay |
+| `/api/stream` | ~~MPEG-TS~~ | Removed — redundant with `/api/fmp4` |
 | `/api/snap` | JPEG | Snapshot |
 | `/api/settings` | JSON | Settings GET/POST with exact field names |
 | `/api/record?action=...` | JSON | Recording control |

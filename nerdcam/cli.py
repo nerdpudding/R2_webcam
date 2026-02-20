@@ -7,15 +7,10 @@ Run: python3 nerdcam.py
 """
 
 import atexit
-import json
 import logging
 import os
 import subprocess
-import getpass
-import threading
-import time
 
-from nerdcam.camera_cgi import cgi, ok, show_dict
 from nerdcam import config as _config_mod
 from nerdcam.state import (AppState, PROJECT_DIR, LOG_PATH,
                            COMPRESSION_LABELS)
@@ -275,10 +270,10 @@ def main():
             open_viewer(config, open_browser=False)
             if _viewer_server:
                 print(f"\n  Server running. Stream URLs (no password needed):")
-                print(f"    Video only:    http://localhost:8088/api/mjpeg")
-                print(f"    Video + audio: http://localhost:8088/api/stream")
-                print(f"    Snapshot:      http://localhost:8088/api/snap")
-                print(f"\n  Use in NerdPudding or VLC. Server stays running.")
+                print(f"    Video only:     http://localhost:8088/api/mjpeg  (MJPEG, ~1s)")
+                print(f"    Video + audio:  http://localhost:8088/api/fmp4   (fMP4, ~3s)")
+                print(f"    Snapshot:       http://localhost:8088/api/snap")
+                print(f"\n  Use in NerdPudding, VLC, or browser. Server stays running.")
         elif choice == "3":
             _cam_ctl.show_stream_url(config, _viewer_server)
         elif choice == "4":
@@ -300,8 +295,7 @@ def main():
 
 def _advanced_menu(config):
     """Advanced settings submenu."""
-    global _viewer_server, _stream_quality, _compression_config
-    _compression_config = config
+    global _viewer_server, _stream_quality
 
     first = True
     while True:
@@ -355,7 +349,7 @@ def _advanced_menu(config):
         elif choice == "6":
             _cam_ctl.audio_menu(config)
         elif choice == "7":
-            _compression_menu()
+            _compression_menu(config)
         elif choice == "8":
             _cam_ctl.watch_stream(config)
         elif choice == "9":
@@ -548,9 +542,7 @@ def _mic_gain_menu(config):
         print("  Invalid number")
 
 
-_compression_config = None  # set by _advanced_menu
-
-def _compression_menu():
+def _compression_menu(config):
     """Set stream compression quality."""
     global _stream_quality
     print("\n--- Stream Compression Quality ---")
@@ -574,7 +566,7 @@ def _compression_menu():
             ffmpeg_q = int(2 + (10 - val) * 29 / 9)
             print(f"  Set to {val}/10 (internal ffmpeg q={ffmpeg_q})")
             # Save to encrypted config
-            _save_settings(_compression_config)
+            _save_settings(config)
             if _viewer_server:
                 print("  NOTE: Restart the server (stop + start) for changes to take effect.")
         else:

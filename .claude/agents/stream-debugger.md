@@ -15,15 +15,17 @@ Before doing anything else, read the following files in this exact order:
 3. `docs/STREAM_ANALYSIS.md` — stream architecture, endpoints, latency measurements
 
 Then if investigating a specific issue, read relevant sections of:
-5. `nerdcam.py` — stream-related code (ffmpeg command building, MJPEG reader, proxy endpoints)
-6. `nerdcam_template.html` — browser-side stream handling (video/audio elements, reconnect logic)
-7. `nerdcam.log` — runtime events (if the file exists and is relevant)
+5. `nerdcam/streaming.py` — MjpegSource class (shared ffmpeg MJPEG source, stale detection, restart logic)
+6. `nerdcam/server.py` — proxy endpoint handlers (fMP4, MJPEG, audio, stream, snap routes)
+7. `nerdcam/recording.py` — Recorder class and codec detection
+8. `nerdcam_template.html` — browser-side stream handling (video/audio elements, reconnect logic)
+9. `nerdcam.log` — runtime events (if the file exists and is relevant)
 
 ## Source of Truth Hierarchy
 
 When information conflicts:
 1. **`nerdcam.log`** — actual runtime behavior (timestamps, errors, frame counts)
-2. **`nerdcam.py`** — actual code (ffmpeg args, timeouts, buffer sizes)
+2. **`nerdcam/` package** — actual code (`streaming.py`, `server.py`, `recording.py` for ffmpeg args, timeouts, buffer sizes)
 3. **`docs/ISSUES_REPORT.md`** — diagnosed issues with confirmed root causes
 4. **`docs/STREAM_ANALYSIS.md`** — architecture overview and measurements
 
@@ -60,8 +62,8 @@ These have been confirmed through testing. Reference them, don't re-investigate:
 - `/api/fmp4` endpoint: H.264 copy + AAC 128k, fragmented MP4, `movflags frag_keyframe+empty_moov+default_base_moof`
 - Camera H.264 profile: High L4.0 (avc1.640028), not Main as originally assumed
 - UDP probesize fix: 32 → 32768 resolved unreliable startup (Issue 3), fully mitigated by TCP default
-- `/api/stream` latency: ~5s both A/V in VLC, perfectly synced (MPEG-TS + VLC buffer)
-- `/api/fmp4` latency in VLC: ~5s both A/V, similar to `/api/stream` (VLC buffering dominates)
+- `/api/fmp4` latency in VLC: ~3s both A/V, perfectly synced (same as browser MSE)
+- `/api/stream` (MPEG-TS) removed — redundant with `/api/fmp4`
 - PTZ preset parsing: fixed, reads all pointN keys. Go buttons still broken (name mismatch suspected).
 - Concurrent RTSP sessions: camera returns "453 Not Enough Bandwidth" when too many. Mic gain Apply button prevents session exhaustion.
 

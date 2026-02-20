@@ -463,22 +463,25 @@ def generate_viewer(config):
 
 def show_stream_url(config, viewer_server):
     print("\n--- Stream URLs (no credentials needed) ---")
-    print("  Start viewer server first (option v)!\n")
-    print("  Video only (MJPEG, for browser/OpenCV/NerdPudding):")
+    if viewer_server is None:
+        print("  WARNING: Server not running! Start it first.\n")
+    print("  VIDEO ONLY (lowest latency, ~1s):")
     print("    http://localhost:8088/api/mjpeg")
+    print("    MJPEG — re-encoded from camera H.264, no audio")
+    print("    For: NerdPudding, OpenCV, browser (mic off)")
     print()
-    print("  Video + Audio (MPEG-TS, for VLC/ffplay):")
-    print("    http://localhost:8088/api/stream")
+    print("  SYNCED A/V (~3-3.5s latency):")
+    print("    http://localhost:8088/api/fmp4")
+    print("    fMP4 — H.264 copy + AAC audio")
+    print("    For: browser (mic on), VLC, ffplay")
     print()
-    print("  Single snapshot (JPEG):")
+    print("  SNAPSHOT:")
     print("    http://localhost:8088/api/snap")
     print()
     print("  Examples:")
-    print("    vlc http://localhost:8088/api/stream")
+    print("    vlc http://localhost:8088/api/fmp4")
     print("    ffplay http://localhost:8088/api/mjpeg")
     print("    cv2.VideoCapture('http://localhost:8088/api/mjpeg')")
-    if viewer_server is None:
-        print("\n  WARNING: Server not running! Start it with option v.")
 
 
 def watch_stream(config):

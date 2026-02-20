@@ -12,7 +12,7 @@ NerdCam is a fully local, no-cloud replacement for the Foscam R2's outdated offi
                      NerdCam
   ┌────────────────────────────────────────────┐
   │                                            │
-  │  CLI (nerdcam.py)      Web Viewer          │
+  │  CLI (nerdcam/)        Web Viewer          │
   │    ┌──────────┐       ┌──────────────┐     │
   │    │ Main Menu│       │ Browser UI   │     │
   │    │ PTZ/IR/  │       │ Live stream  │     │
@@ -24,10 +24,9 @@ NerdCam is a fully local, no-cloud replacement for the Foscam R2's outdated offi
   │    │     HTTP Proxy Server        │        │
   │    │  :8088                       │        │
   │    │  /api/mjpeg  /api/fmp4       │        │
-  │    │  /api/stream /api/audio      │        │
-  │    │  /api/snap   /api/cam        │        │
+  │    │  /api/audio  /api/snap       │        │
+  │    │  /api/cam    /api/settings    │        │
   │    │  /api/record /api/patrol     │        │
-  │    │  /api/settings               │        │
   │    └────────────┬─────────────────┘        │
   │                 │                           │
   └─────────────────┼───────────────────────────┘
@@ -96,8 +95,8 @@ NerdCam Application
 | Video output (browser) | Hybrid: MJPEG `<img>` (mic off, ~1s) / MSE fMP4 `<video>` (mic on, ~3-3.5s synced A/V) | WebRTC for lower latency |
 | Video output (NerdPudding) | HTTP MJPEG `/api/mjpeg` (custom boundary parser) | Possibly RTSP relay (if NerdPudding adds reconnect) |
 | Audio output (browser) | Combined with video via MSE/fMP4 (synced) | — |
-| A/V output (VLC) | MPEG-TS `/api/stream` or fMP4 `/api/fmp4` | Lower latency options |
-| Recording | Local MP4 (NVENC/SW) | Network drive storage |
+| A/V output (VLC) | fMP4 `/api/fmp4` (H.264 copy + AAC) | Lower latency options |
+| Recording | Local MP4 (NVENC/SW), configurable output dir | Image preprocessing for NerdPudding |
 | Image preprocessing | None | Lighting/contrast for NerdPudding |
 | Platform | x86 Linux | Raspberry Pi support |
 
@@ -127,7 +126,8 @@ NerdCam Application
 
 | Resource | Location | Purpose |
 |----------|----------|---------|
-| nerdcam.py | Project root | Main application (2200 lines) |
+| nerdcam.py | Project root | Thin launcher (imports `nerdcam.cli.main`) |
+| nerdcam/ | Project root | Main application package (12 modules) |
 | nerdcam_template.html | Project root | Web viewer template |
 | Foscam CGI API | Camera firmware | Control protocol (no official docs) |
 | NerdPudding | Separate project | AI app consuming `/api/mjpeg` |
@@ -147,4 +147,4 @@ NerdCam Application
 
 ## Development Approach
 
-Iterative hobby project using sprint-based planning (see `roadmap.md`). SOLID/DRY/KISS principles. The monolith (`nerdcam.py`, ~2200 lines) is being refactored into a modular Python package in Sprint 2 — complexity has reached the point where splitting is warranted.
+Iterative hobby project using sprint-based planning (see `roadmap.md`). SOLID/DRY/KISS principles. Sprint 2 refactored the monolith into the `nerdcam/` package (12 modules, AppState dataclass). New features (NerdPudding optimization, image preprocessing, RTSP relay) are built on this clean codebase in Sprint 3.
