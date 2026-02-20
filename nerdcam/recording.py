@@ -110,7 +110,7 @@ class Recorder:
               rec_gpu, rec_codecs, available_gpus):
         """Start recording. Returns True on success."""
         if self._proc and self._proc.poll() is None:
-            print("  Already recording!")
+            log.warning("Recording start called but already recording")
             return False
 
         os.makedirs(self.output_dir, exist_ok=True)
@@ -139,7 +139,7 @@ class Recorder:
                 err = self._proc.stderr.read().decode(errors="replace")
                 err_lines = [l for l in err.strip().splitlines() if l.strip()]
                 err_tail = "\n    ".join(err_lines[-5:]) if err_lines else "unknown error"
-                print(f"  ERROR: ffmpeg exited immediately:\n    {err_tail}")
+                log.error("Recording failed: ffmpeg exited immediately:\n    %s", err_tail)
                 self._proc = None
                 self._info = None
                 return False
@@ -147,11 +147,9 @@ class Recorder:
                           "codec": rec_codec, "compression": rec_compression}
             log.info("Recording started: %s (codec=%s, compression=%d)",
                      filename, rec_codec, rec_compression)
-            print(f"  Recording started: {filename} ({rec_codec}, compression {rec_compression})")
             return True
         except FileNotFoundError:
             log.error("Recording failed: ffmpeg not found")
-            print("  ERROR: ffmpeg not found.")
             return False
 
     def stop(self):
@@ -159,7 +157,7 @@ class Recorder:
         if not self._proc or self._proc.poll() is not None:
             self._proc = None
             self._info = None
-            print("  Not recording.")
+            log.warning("Recording stop called but not recording")
             return False
 
         try:
@@ -170,7 +168,6 @@ class Recorder:
             self._proc.kill()
         elapsed = time.time() - self._info["started"]
         log.info("Recording stopped: %s (%ds)", self._info['filename'], int(elapsed))
-        print(f"  Recording stopped: {self._info['filename']} ({int(elapsed)}s)")
         self._proc = None
         self._info = None
         return True

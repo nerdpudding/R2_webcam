@@ -88,6 +88,7 @@ The settings menu is organized into submenus:
 | **3** | Recording | Start/stop recording, codec selection, compression level, GPU selection |
 | **4** | Network | WiFi status, configure WiFi, port info |
 | **5** | System | Device info, time sync, reboot camera, raw CGI command, update credentials |
+| **6** | Toggle logging | Turn file logging on/off (defaults to OFF, writes to `nerdcam.log` when ON) |
 
 ### Camera Submenu
 

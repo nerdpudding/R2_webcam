@@ -30,7 +30,7 @@ def cls():
     os.system("clear" if os.name != "nt" else "cls")
 
 
-# Logging: DEBUG+ to file, ERROR+ to terminal (keeps menu clean)
+# Logging: DEBUG+ to file (off by default), ERROR+ to terminal
 log = logging.getLogger("nerdcam")
 log.setLevel(logging.DEBUG)
 _log_file = logging.FileHandler(LOG_PATH, encoding="utf-8")
@@ -40,7 +40,6 @@ _log_file.setFormatter(logging.Formatter(
 _log_console = logging.StreamHandler()
 _log_console.setLevel(logging.ERROR)
 _log_console.setFormatter(logging.Formatter("  %(levelname)s: %(message)s"))
-log.addHandler(_log_file)
 log.addHandler(_log_console)
 
 # Shared instances
@@ -218,12 +217,14 @@ def _settings_menu(config):
     """Settings menu with categorized submenus."""
     while True:
         cls()
+        log_status = "ON" if _log_file in log.handlers else "OFF"
         print("--- Settings ---")
         print("  1. Camera (PTZ, image, IR, video, motion, audio)")
         print("  2. Stream (quality, mic gain, snapshot)")
         print("  3. Recording")
         print("  4. Network (WiFi, ports)")
         print("  5. System (device info, time, reboot, credentials)")
+        print(f"  6. Toggle logging [{log_status}]")
         print("  b. Back")
         choice = input("\nChoice: ").strip().lower()
 
@@ -237,6 +238,15 @@ def _settings_menu(config):
             _network_menu(config)
         elif choice == "5":
             _system_menu(config)
+        elif choice == "6":
+            if _log_file in log.handlers:
+                log.info("Logging disabled by user")
+                log.removeHandler(_log_file)
+                print("  Logging OFF")
+            else:
+                log.addHandler(_log_file)
+                log.info("Logging enabled by user")
+                print("  Logging ON")
         elif choice == "b":
             break
 
