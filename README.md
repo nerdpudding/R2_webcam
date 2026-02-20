@@ -135,7 +135,7 @@ Patrol config is stored in the encrypted config file and persists between sessio
 
 ## Web Viewer
 
-Start the server (option **1** from the main menu) and open the viewer URL shown inline (`http://localhost:8088/nerdcam.html`). The web viewer provides:
+Start the server (option **1** from the main menu) and open the viewer URL shown inline (`http://localhost:8088/nerdcam`). The web viewer provides:
 
 - **Hybrid live stream** - MJPEG video (mic off, ~1s latency) or MSE/fMP4 synced audio+video (mic on, ~3-3.5s latency). Automatic switching, with MSE fallback to MJPEG for unsupported browsers. State tracking (CONNECTING / LIVE / RECONNECTING / DISCONNECTED / STOPPED)
 - **Pan/Tilt controls** - Arrow buttons to move the camera, configurable speed, preset positions (Go/Save), automated patrol with H:M:S time config, live position indicators, progress bar, and countdown

@@ -185,7 +185,7 @@ def main():
             print(f"  {_last_msg}")
             _last_msg = ""
         if _server.running:
-            print(f"  Viewer: http://localhost:8088/nerdcam.html")
+            print(f"  Viewer: http://localhost:8088/nerdcam")
             print(f"  MJPEG:  http://localhost:8088/api/mjpeg")
             print(f"  fMP4:   http://localhost:8088/api/fmp4")
         print()
