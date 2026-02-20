@@ -121,7 +121,7 @@ Reducing NerdCam's stream contribution helps, but the majority of this latency s
 - PTZ presets: correctly parses all preset positions (was broken, now fixed)
 - Patrol feature: server-side daemon, survives browser close
 - `/api/mjpeg` contract for NerdPudding: verified intact (correct headers, valid JPEG frames)
-- Logging: all stream events, CGI commands, errors captured to `nerdcam.log`
+- File logging: available via Settings → Toggle logging (defaults to OFF, writes to `nerdcam.log` when ON)
 
 ---
 

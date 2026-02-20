@@ -20,15 +20,22 @@
 
 **Goal:** Refactor monolith into a proper Python package with SOLID modules. Fix remaining bugs and add small QoL improvements that naturally fit during the refactor. See `archive/2026-02-20_PLAN_sprint2_modular_refactor.md` for full plan.
 
-- [x] Refactor `nerdcam.py` → `nerdcam/` package (12 modules, AppState dataclass)
-- [ ] PTZ preset Go buttons — fix name mismatch between save/goto CGI commands (needs camera testing)
+- [x] Refactor `nerdcam.py` → `nerdcam/` package (11 modules, AppState dataclass)
 - [x] Network drive recording location (configurable `output_dir` in Recorder)
-- [x] PTZ patrol improvements (partial — obvious fixes during patrol.py extraction, rest to Sprint 3)
+- [x] PTZ patrol improvements (partial — obvious fixes during patrol.py extraction)
 - [x] Improve server error responses (structured JSON errors)
 - [x] Auto time sync on startup (DST-aware)
+- [x] Code review: thread safety, globals-to-AppState migration, dead code cleanup
+- [x] File logging with toggle (default OFF, writes to `nerdcam.log`)
+- [x] Server-side rendered viewer (template in-memory, no file on disk)
+- [x] Cross-browser stream disconnect/reconnect (MJPEG watchdog, MSE health check)
+- [x] CLI menu restructure (toggle server, settings submenus)
+- [x] Fix `setVideoStreamParam` CGI (requires all params + streamType together)
+- [x] VBR/CBR toggle in video settings
+- [x] ONVIF probe tool (`tools/onvif_probe.py`)
 - [x] Patrol UX overhaul: position indicators, progress bar, countdown, H:M:S time selects, mobile-friendly
 - [x] Full regression test (manual — all major features verified)
-- [x] Merge dev → main after refactor complete
+- [x] Merge dev → main
 
 ## Sprint 3: WebRTC + Features
 
@@ -101,4 +108,11 @@ go2rtc solves three problems at once: WebRTC, RTSP relay, and 2-way audio.
 - [x] Configurable recording output directory (network drive support)
 - [x] Structured JSON error responses from proxy server
 - [x] Auto time sync on startup (DST-aware)
+- [x] Server-side rendered viewer (in-memory template, no generated file on disk)
+- [x] Cross-browser stream disconnect/reconnect (MJPEG watchdog, MSE health check)
+- [x] CLI menu restructure (toggle server, settings submenus)
+- [x] Fix video settings CGI (all params + streamType required together)
+- [x] VBR/CBR toggle in video settings
+- [x] ONVIF probe tool (`tools/onvif_probe.py`)
+- [x] PTZ preset save fix (delete before add with 1s delay)
 - [x] Patrol UX overhaul: visual position indicators, progress bar, countdown display, H:M:S time selects (mobile-friendly)
