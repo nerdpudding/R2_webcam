@@ -11,9 +11,6 @@ import json
 import logging
 import os
 import subprocess
-import urllib.parse
-import urllib.request
-import xml.etree.ElementTree as ET
 import getpass
 import threading
 import time
@@ -27,6 +24,7 @@ from nerdcam.recording import Recorder, detect_codecs
 from nerdcam.patrol import PatrolController, get_patrol_config, save_patrol_config
 from nerdcam import ptz as _ptz_mod
 from nerdcam import camera_control as _cam_ctl
+from nerdcam.server import NerdCamServer, ServerContext
 
 # Module-level state reference, set in main()
 _state = None
@@ -55,8 +53,10 @@ _stream_quality = 7  # 1-10 scale: 10=best quality, 1=lowest. Maps to ffmpeg -q:
 _mic_gain = 3.0  # Audio volume multiplier for mic stream (1.0-5.0)
 _rtsp_transport = "tcp"  # "tcp" (reliable, zero post-timeout failures) or "udp" (lower startup latency)
 
-# Shared MJPEG source instance
+# Shared instances
 _mjpeg = MjpegSource()
+_server = NerdCamServer()
+_server_ctx = None  # ServerContext, initialized in main()
 
 
 def _start_mjpeg_source(cam):
@@ -84,6 +84,11 @@ _master_pwd = None
 # ---------------------------------------------------------------------------
 # Bridge functions: sync globals <-> AppState until full migration
 # ---------------------------------------------------------------------------
+
+def _set_global(name, value):
+    """Helper: set a module-level global by name (for server context callbacks)."""
+    globals()[name] = value
+
 
 def _save_settings(config):
     """Bridge: save settings via globals -> state -> config.py."""
@@ -119,444 +124,28 @@ def ptz_menu(config):
 
 def open_viewer(config, open_browser=True):
     """Start proxy server (and optionally open web viewer in browser)."""
-    import http.server
-    from urllib.parse import urlparse, parse_qs
-
-    cam = config["camera"]
-    cam_base = f"http://{cam['ip']}:{cam['port']}/cgi-bin/CGIProxy.fcgi"
-
-    port = 8088
-
-    class ProxyHandler(http.server.SimpleHTTPRequestHandler):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=PROJECT_DIR, **kwargs)
-
-        def log_message(self, format, *args):
-            pass
-
-        def do_GET(self):
-            global _mic_gain, _rec_codec, _rec_compression, _rec_gpu, _rtsp_transport
-            parsed = urlparse(self.path)
-
-            # Proxy: /api/cam?cmd=XXX&param=val -> camera CGI
-            if parsed.path == "/api/cam":
-                qs = parse_qs(parsed.query)
-                params = {k: v[0] for k, v in qs.items()}
-                params["usr"] = cam["username"]
-                params["pwd"] = cam["password"]
-                cam_url = f"{cam_base}?{urllib.parse.urlencode(params)}"
-                cmd_name = params.get("cmd", "?")
-                # Log PTZ and preset commands with their parameters
-                extra_params = {k: v for k, v in params.items() if k not in ("cmd", "usr", "pwd")}
-                if extra_params:
-                    log.debug("CGI: %s %s", cmd_name, extra_params)
-                else:
-                    log.debug("CGI: %s", cmd_name)
-                try:
-                    with urllib.request.urlopen(cam_url, timeout=10) as resp:
-                        data = resp.read()
-                    # Parse result code for logging
-                    try:
-                        _root = ET.fromstring(data.decode())
-                        _result = {c.tag: c.text or "" for c in _root}
-                        _rc = _result.get("result", "?")
-                        if _rc != "0":
-                            log.warning("CGI: %s returned result=%s", cmd_name, _rc)
-                        elif cmd_name.startswith("ptz"):
-                            log.info("CGI: %s OK %s", cmd_name, extra_params)
-                    except Exception:
-                        pass
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/xml")
-                    self.send_header("Access-Control-Allow-Origin", "*")
-                    self.end_headers()
-                    self.wfile.write(data)
-                except Exception as e:
-                    log.error("CGI proxy error (cmd=%s): %s", cmd_name, e)
-                    self.send_response(502)
-                    self.send_header("Content-Type", "text/plain")
-                    self.end_headers()
-                    self.wfile.write(f"Camera error: {e}".encode())
-                return
-
-            # Proxy: /api/snap -> camera snapshot (returns JPEG)
-            if parsed.path == "/api/snap":
-                snap_url = (f"{cam_base}?cmd=snapPicture2"
-                            f"&usr={urllib.parse.quote(cam['username'])}"
-                            f"&pwd={urllib.parse.quote(cam['password'])}")
-                try:
-                    with urllib.request.urlopen(snap_url, timeout=10) as resp:
-                        data = resp.read()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "image/jpeg")
-                    self.send_header("Cache-Control", "no-cache")
-                    self.end_headers()
-                    self.wfile.write(data)
-                except Exception as e:
-                    self.send_response(502)
-                    self.end_headers()
-                return
-
-            # MJPEG stream (shared source: one ffmpeg, multiple clients)
-            # OpenCV can read this: cv2.VideoCapture("http://localhost:8088/api/mjpeg")
-            if parsed.path == "/api/mjpeg":
-                self.connection.settimeout(30)
-                _start_mjpeg_source(cam)
-                self.send_response(200)
-                self.send_header("Content-Type",
-                                 "multipart/x-mixed-replace; boundary=ffmpeg")
-                self.send_header("Cache-Control", "no-cache")
-                self.end_headers()
-                log.info("MJPEG client connected from %s", self.client_address[0])
-                try:
-                    last_id = 0
-                    no_frame_count = 0
-                    while True:
-                        fid = _mjpeg.frame_id
-                        frame = _mjpeg.frame
-                        if fid > last_id and frame is not None:
-                            no_frame_count = 0
-                            last_id = fid
-                            self.wfile.write(b"--ffmpeg\r\n")
-                            self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                            self.wfile.write(
-                                f"Content-Length: {len(frame)}\r\n".encode())
-                            self.wfile.write(b"\r\n")
-                            self.wfile.write(frame)
-                            self.wfile.write(b"\r\n")
-                            self.wfile.flush()
-                        else:
-                            time.sleep(0.02)
-                            no_frame_count += 1
-                            if no_frame_count >= 100:  # ~2s no frames
-                                log.warning("MJPEG client: %ds no frames, requesting source restart", no_frame_count // 50)
-                                _start_mjpeg_source(cam)
-                                no_frame_count = 0
-                except (BrokenPipeError, ConnectionResetError, OSError):
-                    log.info("MJPEG client disconnected from %s", self.client_address[0])
-                return
-
-            # Audio-only stream via ffmpeg (RTSP -> MP3, for browser <audio>)
-            if parsed.path == "/api/audio":
-                self.connection.settimeout(30)
-                rtsp_port = cam.get("port", 88)
-                rtsp_url = (f"rtsp://{cam['username']}:{cam['password']}"
-                            f"@{cam['ip']}:{rtsp_port}/videoMain")
-                self.send_response(200)
-                self.send_header("Content-Type", "audio/mpeg")
-                self.send_header("Cache-Control", "no-cache")
-                self.end_headers()
-                audio_probe = "500000" if _rtsp_transport == "tcp" else "32768"
-                audio_analyze = "500000" if _rtsp_transport == "tcp" else "0"
-                log.info("Audio stream starting (transport=%s, gain=%.1f)", _rtsp_transport, _mic_gain)
-                try:
-                    proc = subprocess.Popen(
-                        ["ffmpeg",
-                         "-fflags", "+nobuffer+flush_packets",
-                         "-flags", "low_delay",
-                         "-probesize", audio_probe,
-                         "-analyzeduration", audio_analyze,
-                         "-rtsp_transport", _rtsp_transport,
-                         "-i", rtsp_url,
-                         "-vn",
-                         "-af", f"volume={_mic_gain}",
-                         "-c:a", "libmp3lame",
-                         "-b:a", "128k",
-                         "-f", "mp3",
-                         "-flush_packets", "1",
-                         "pipe:1"],
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.DEVNULL
-                    )
-                    while True:
-                        chunk = proc.stdout.read(4096)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-                        self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError, OSError):
-                    log.info("Audio stream disconnected")
-                except Exception as e:
-                    log.error("Audio stream error: %s", e)
-                finally:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-                return
-
-            # Settings endpoint (GET returns JSON, GET with params updates)
-            if parsed.path == "/api/settings":
-                qs = parse_qs(parsed.query)
-                changed = False
-                if "mic_gain" in qs:
-                    try:
-                        val = float(qs["mic_gain"][0])
-                        if 1.0 <= val <= 5.0:
-                            _mic_gain = round(val, 1)
-                            changed = True
-                    except (ValueError, IndexError):
-                        pass
-                if "rec_codec" in qs:
-                    val = qs["rec_codec"][0]
-                    if val in REC_CODECS:
-                        _rec_codec = val
-                        changed = True
-                if "rec_compression" in qs:
-                    try:
-                        val = int(qs["rec_compression"][0])
-                        if 1 <= val <= 10:
-                            _rec_compression = val
-                            changed = True
-                    except (ValueError, IndexError):
-                        pass
-                if "rec_gpu" in qs:
-                    val = qs["rec_gpu"][0]
-                    valid = {"auto"} | {idx for idx, _ in _available_gpus}
-                    if val in valid:
-                        _rec_gpu = val
-                        changed = True
-                if "rtsp_transport" in qs:
-                    val = qs["rtsp_transport"][0]
-                    if val in ("udp", "tcp"):
-                        _rtsp_transport = val
-                        changed = True
-                        # Force MJPEG source restart with new transport
-                        _stop_mjpeg_source()
-                        log.info("RTSP transport changed to %s, MJPEG source will restart on next request", val)
-                if changed:
-                    _save_settings(config)
-                import json as _json
-                codecs_info = {k: {"desc": v[1]}
-                               for k, v in REC_CODECS.items()}
-                gpus_info = [{"index": idx, "name": name}
-                             for idx, name in _available_gpus]
-                resp_data = _json.dumps({
-                    "mic_gain": _mic_gain,
-                    "stream_quality": _stream_quality,
-                    "rec_codec": _rec_codec,
-                    "rec_compression": _rec_compression,
-                    "rec_gpu": _rec_gpu,
-                    "rtsp_transport": _rtsp_transport,
-                    "rec_codecs": codecs_info,
-                    "gpus": gpus_info,
-                })
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(resp_data.encode())
-                return
-
-            # Recording endpoint (start/stop/status)
-            if parsed.path == "/api/record":
-                import json as _json
-                qs = parse_qs(parsed.query)
-                action = qs.get("action", ["status"])[0]
-                if action == "start":
-                    _start_recording(config)
-                elif action == "stop":
-                    _stop_recording()
-                status = _recording_status()
-                resp_data = _json.dumps(status)
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(resp_data.encode())
-                return
-
-            # Patrol endpoint (start/stop/status/config)
-            if parsed.path == "/api/patrol":
-                import json as _json
-                qs = parse_qs(parsed.query)
-                action = qs.get("action", ["status"])[0]
-                if action == "start":
-                    result = _start_patrol(config)
-                elif action == "stop":
-                    result = _stop_patrol()
-                elif action == "config":
-                    # Save patrol config if data provided
-                    patrol_data = {}
-                    if "positions" in qs:
-                        try:
-                            patrol_data["positions"] = _json.loads(qs["positions"][0])
-                        except (ValueError, KeyError):
-                            pass
-                    if "repeat" in qs:
-                        patrol_data["repeat"] = qs["repeat"][0] == "true"
-                    if patrol_data:
-                        current = _get_patrol_config(config)
-                        current.update(patrol_data)
-                        _save_patrol_config(config, current)
-                    result = _get_patrol_config(config)
-                else:
-                    result = _get_patrol_status()
-                result_with_status = dict(_get_patrol_status())
-                if isinstance(result, dict) and "ok" in result:
-                    result_with_status.update(result)
-                elif action == "config":
-                    result_with_status["config"] = result
-                resp_data = _json.dumps(result_with_status)
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(resp_data.encode())
-                return
-
-            # Full A/V stream via ffmpeg (RTSP -> MPEG-TS, for VLC/ffplay)
-            # VLC: vlc http://localhost:8088/api/stream
-            if parsed.path == "/api/stream":
-                self.connection.settimeout(30)
-                rtsp_port = cam.get("port", 88)
-                rtsp_url = (f"rtsp://{cam['username']}:{cam['password']}"
-                            f"@{cam['ip']}:{rtsp_port}/videoMain")
-                self.send_response(200)
-                self.send_header("Content-Type", "video/mp2t")
-                self.send_header("Cache-Control", "no-cache")
-                self.end_headers()
-                av_probe = "500000" if _rtsp_transport == "tcp" else "32768"
-                av_analyze = "500000" if _rtsp_transport == "tcp" else "0"
-                log.info("AV stream starting (transport=%s, client=%s)", _rtsp_transport, self.client_address[0])
-                try:
-                    proc = subprocess.Popen(
-                        ["ffmpeg",
-                         "-fflags", "+nobuffer+flush_packets",
-                         "-flags", "low_delay",
-                         "-probesize", av_probe,
-                         "-analyzeduration", av_analyze,
-                         "-rtsp_transport", _rtsp_transport,
-                         "-i", rtsp_url,
-                         "-c:v", "copy",
-                         "-c:a", "aac",
-                         "-f", "mpegts",
-                         "-muxdelay", "0",
-                         "-muxpreload", "0",
-                         "-flush_packets", "1",
-                         "pipe:1"],
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE
-                    )
-                    while True:
-                        chunk = proc.stdout.read(4096)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-                        self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError, OSError):
-                    log.info("AV stream disconnected")
-                except Exception as e:
-                    log.error("AV stream error: %s", e)
-                finally:
-                    try:
-                        err = proc.stderr.read().decode(errors="replace").strip()
-                        if err:
-                            lines = [l for l in err.splitlines() if l.strip()][-5:]
-                            log.warning("AV stream ffmpeg stderr:\n  %s", "\n  ".join(lines))
-                        proc.kill()
-                    except Exception:
-                        pass
-                return
-
-            # Fragmented MP4 A/V stream for MSE (RTSP -> fMP4, for browser <video>)
-            if parsed.path == "/api/fmp4":
-                self.connection.settimeout(30)
-                rtsp_port = cam.get("port", 88)
-                rtsp_url = (f"rtsp://{cam['username']}:{cam['password']}"
-                            f"@{cam['ip']}:{rtsp_port}/videoMain")
-                self.send_response(200)
-                self.send_header("Content-Type", "video/mp4")
-                self.send_header("Cache-Control", "no-cache")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                fmp4_probe = "500000" if _rtsp_transport == "tcp" else "32768"
-                fmp4_analyze = "500000" if _rtsp_transport == "tcp" else "0"
-                gain = f"volume={_mic_gain:.1f}" if _mic_gain != 1.0 else "volume=1.0"
-                log.info("fMP4 stream starting (transport=%s, gain=%.1f, client=%s)",
-                         _rtsp_transport, _mic_gain, self.client_address[0])
-                try:
-                    proc = subprocess.Popen(
-                        ["ffmpeg",
-                         "-fflags", "+nobuffer+flush_packets+genpts",
-                         "-flags", "low_delay",
-                         "-probesize", fmp4_probe,
-                         "-analyzeduration", fmp4_analyze,
-                         "-rtsp_transport", _rtsp_transport,
-                         "-i", rtsp_url,
-                         "-c:v", "copy",
-                         "-c:a", "aac", "-b:a", "128k",
-                         "-af", gain,
-                         "-f", "mp4",
-                         "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-                         "-frag_duration", "500000",
-                         "-min_frag_duration", "250000",
-                         "-flush_packets", "1",
-                         "pipe:1"],
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE
-                    )
-                    while True:
-                        chunk = proc.stdout.read(4096)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-                        self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError, OSError):
-                    log.info("fMP4 stream disconnected")
-                except Exception as e:
-                    log.error("fMP4 stream error: %s", e)
-                finally:
-                    try:
-                        err = proc.stderr.read().decode(errors="replace").strip()
-                        if err:
-                            lines = [l for l in err.splitlines() if l.strip()][-5:]
-                            log.warning("fMP4 stream ffmpeg stderr:\n  %s", "\n  ".join(lines))
-                        proc.kill()
-                    except Exception:
-                        pass
-                return
-
-            # Default: serve static files
-            super().do_GET()
-
-    class ThreadedServer(http.server.ThreadingHTTPServer):
-        daemon_threads = True
-
-    # Start server if not already running
     global _viewer_server
     if _viewer_server is None:
-        server = ThreadedServer(("127.0.0.1", port), ProxyHandler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        _viewer_server = server
-        log.info("Server started on port %d", port)
-        print(f"  Server started on port {port}")
+        _server.start(config, _mjpeg, _server_ctx)
+        _viewer_server = True
     else:
-        print(f"  Server already running on port {port}")
+        print("  Server already running on port 8088")
 
     if open_browser:
         _cam_ctl.generate_viewer(config)
-        url = f"http://localhost:{port}/nerdcam.html"
+        url = "http://localhost:8088/nerdcam.html"
         subprocess.Popen(["xdg-open", url],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         print(f"  Web viewer opened: {url}")
 
 
-
-
 def _stop_server():
     global _viewer_server
-    _stop_mjpeg_source()
-    if _viewer_server:
-        _viewer_server.shutdown()
+    if _server.running:
+        _server.stop(_mjpeg)
         _viewer_server = None
-        log.info("Server stopped")
-        print("  Server stopped.")
         return True
+    _mjpeg.stop()
     print("  No server running.")
     return False
 
@@ -592,7 +181,7 @@ def _check_dependencies():
 
 
 def main():
-    global _state, _viewer_server, _stream_quality, _mic_gain, _rtsp_transport
+    global _state, _server_ctx, _viewer_server, _stream_quality, _mic_gain, _rtsp_transport
     global _rec_codec, _rec_compression, _rec_gpu, _available_gpus
     global REC_CODECS, _DEFAULT_REC_CODEC, _master_pwd
 
@@ -623,6 +212,34 @@ def main():
     REC_CODECS = state.rec_codecs
     _DEFAULT_REC_CODEC = state.default_rec_codec
     _master_pwd = state.master_pwd
+
+    # Build server context with callbacks into current globals
+    _server_ctx = ServerContext(
+        get_stream_quality=lambda: _stream_quality,
+        get_mic_gain=lambda: _mic_gain,
+        set_mic_gain=lambda v: _set_global('_mic_gain', v),
+        get_rtsp_transport=lambda: _rtsp_transport,
+        set_rtsp_transport=lambda v: _set_global('_rtsp_transport', v),
+        get_rec_codec=lambda: _rec_codec,
+        set_rec_codec=lambda v: _set_global('_rec_codec', v),
+        get_rec_compression=lambda: _rec_compression,
+        set_rec_compression=lambda v: _set_global('_rec_compression', v),
+        get_rec_gpu=lambda: _rec_gpu,
+        set_rec_gpu=lambda v: _set_global('_rec_gpu', v),
+        get_rec_codecs=lambda: REC_CODECS,
+        get_available_gpus=lambda: _available_gpus,
+        save_settings=lambda: _save_settings(config),
+        start_recording=lambda: _start_recording(config),
+        stop_recording=_stop_recording,
+        recording_status=_recording_status,
+        start_patrol=lambda: _start_patrol(config),
+        stop_patrol=_stop_patrol,
+        get_patrol_status=_get_patrol_status,
+        get_patrol_config=lambda: _get_patrol_config(config),
+        save_patrol_config=lambda cfg: _save_patrol_config(config, cfg),
+        stop_mjpeg=_stop_mjpeg_source,
+        start_mjpeg=lambda cam: _start_mjpeg_source(cam),
+    )
 
     cam = config["camera"]
     print(f"\nCamera: {cam['ip']}:{cam['port']} (user: {cam['username']})")
