@@ -9,10 +9,12 @@ NerdCam is a Python tool for controlling and streaming from a Foscam R2 IP camer
 - **SOLID, DRY, KISS** — keep it simple, don't over-engineer
 - **One source of truth** — no duplicating information across docs
 - **Never delete** — archive to `archive/` with date prefix
-- **Modularity** — single-file is fine while it works; split only when warranted
-- **English only** — all code, comments, docs, commit messages
+- **Modularity** — split into focused modules following SOLID principles
+- **ALL code, docs, comments, plans, and commit messages MUST be in English** — always, no exceptions. The user communicates in Dutch, but everything written to files must be English.
+- **Keep everything up to date** — after any change, verify that docs, agent instructions, and config files still reflect reality. Stale docs are worse than no docs.
+- **Learn from mistakes** — when an approach fails or wastes effort, document it in `docs/lessons_learned.md`. This file is persistent context for AI assistants to avoid repeating the same mistakes.
 - **Build on existing work** — read existing code and docs before changing anything
-- **Use agents** — check agents table below before starting specialized tasks
+- **Use agents** — check agents table below before starting specialized tasks. After changes that affect an agent's domain, update that agent's instructions.
 - **Local-first** — no cloud dependencies, everything runs on LAN
 - **Python stdlib preferred** — avoid pip dependencies for core functionality
 - **ffmpeg is the backbone** — all streaming/recording goes through ffmpeg subprocesses
@@ -49,7 +51,8 @@ R2_webcam/
 │
 ├── docs/                       # Analysis, diagnostics, technical docs
 │   ├── ISSUES_REPORT.md        # Current known issues and their status
-│   └── STREAM_ANALYSIS.md      # Stream architecture analysis and findings
+│   ├── STREAM_ANALYSIS.md      # Stream architecture analysis and findings
+│   └── lessons_learned.md      # What worked and didn't (context for AI assistants)
 │
 ├── recordings/                 # Local recording output (git-ignored)
 │
@@ -101,7 +104,7 @@ NerdPudding is a separate AI processing app that consumes `/api/mjpeg` as its ca
 - **MSE latency** — ~3-3.5s is inherent to the fMP4/MSE pipeline (fragmentation, browser buffering). Cannot be reduced without switching to WebRTC. Acceptable trade-off for synced A/V.
 
 ### Current Priority
-Sprint 1 is nearly complete — only PTZ preset Go buttons remain (save works, Go navigation may have name mismatch). Sprint 2 focuses on NerdPudding stream optimization, image preprocessing, and quality of life improvements. `/api/mjpeg` must remain stable throughout all changes.
+Check `roadmap.md` for current sprint status and priorities. `/api/mjpeg` must remain stable throughout all changes.
 
 ## Plan Rules
 
@@ -128,7 +131,9 @@ Move to `archive/` with date prefix (e.g. `2026-02-19_plan_name.md`):
 
 Read order:
 1. This file (`AI_INSTRUCTIONS.md`)
-2. Today's task tracker (if exists)
-3. Active plans in `claude_plans/`
-4. `concepts/concept.md` for context
-5. Continue with the current task
+2. `docs/lessons_learned.md` — avoid repeating past mistakes
+3. Today's task tracker (if exists)
+4. Active plans in `claude_plans/`
+5. `concepts/concept.md` for context
+6. List contents of `claude_plans/`, `docs/`, `archive/` to know the full picture
+7. Continue with the current task

@@ -1,8 +1,8 @@
 # NerdCam — Roadmap
 
-## Sprint 1: Stream Latency & Sync (current priority)
+## Sprint 1: Stream Latency & Sync
 
-**Goal:** Reduce A/V latency in the web viewer and improve stream reliability. Work in a separate dev branch.
+**Goal:** Reduce A/V latency in the web viewer and improve stream reliability.
 
 - [x] Create dev branch for stream architecture work
 - [x] TCP as default RTSP transport — zero post-timeout restart failures
@@ -15,21 +15,29 @@
 - [x] Fix PTZ preset parsing — correctly reads all preset positions (was only reading first)
 - [x] Verify `/api/mjpeg` contract unchanged after architecture changes (NerdPudding verified)
 - [x] Apply Gain button for mic gain (replaces debounced slider to prevent RTSP session exhaustion)
-- [ ] PTZ preset Go buttons — save works but Go may not navigate correctly (needs investigation)
 
-## Sprint 2: Quality of Life
+## Sprint 2: Modular Refactor + Quality of Life
 
-- [ ] NerdPudding stream optimization — reduce NerdCam's latency contribution to the end-to-end pipeline (currently ~7-10s total: stream + AI inference + TTS + UI). Tune frame delivery, quality, and timing for both AI frame capture and web UI experience
-- [ ] Image preprocessing pipeline (lighting/contrast adjustments before streaming to NerdPudding — MJPEG quality directly impacts AI inference accuracy)
-- [ ] Credential-free RTSP relay endpoint (future-proofing for when NerdPudding adds RTSP reconnect — H.264 gives better AI quality than MJPEG)
+**Goal:** Refactor monolith into a proper Python package with SOLID modules. Fix remaining bugs and add small QoL improvements that naturally fit during the refactor. See `claude_plans/PLAN_sprint2_modular_refactor.md` for full plan.
+
+- [ ] Refactor `nerdcam.py` → `nerdcam/` package (12 modules, AppState dataclass)
+- [ ] PTZ preset Go buttons — fix name mismatch between save/goto CGI commands (moved from Sprint 1)
 - [ ] Network drive recording location (configurable output path)
-- [ ] PTZ patrol improvements (based on findings from Sprint 1 testing)
-- [ ] Improve error messages and recovery feedback in web UI
+- [ ] PTZ patrol improvements (partial — obvious fixes during patrol.py extraction, rest to Sprint 3)
+- [ ] Improve server error responses (structured JSON errors)
+- [ ] Merge dev → main after refactor complete
 
-## Sprint 3: Platform Expansion
+## Sprint 3: Features + Platform
 
+**Goal:** Build new features on the clean modular codebase.
+
+- [ ] NerdPudding stream optimization — reduce latency contribution to end-to-end pipeline
+- [ ] Image preprocessing pipeline (lighting/contrast adjustments before streaming to NerdPudding)
+- [ ] Credential-free RTSP relay endpoint (future-proofing for NerdPudding RTSP input)
+- [ ] PTZ patrol improvements
+- [ ] Improve error messages and recovery feedback in web UI (frontend)
 - [ ] Raspberry Pi compatibility testing
-- [ ] Software-only recording fallback when no NVIDIA GPU (already works with libx264/libx265, but test on Pi)
+- [ ] Software-only recording fallback testing on low-power hardware
 - [ ] Optimize resource usage for low-power hardware
 - [ ] Consider alternative camera models / generic ONVIF support
 
@@ -37,9 +45,9 @@
 
 | Sprint | Status | Notes |
 |--------|--------|-------|
-| 1 | Nearly complete | All items done except PTZ preset Go buttons |
-| 2 | Planned | After Sprint 1 fundamentals are solid |
-| 3 | Future | Depends on Sprint 1-2 stability |
+| 1 | Complete | All items done. PTZ Go bug moved to Sprint 2. |
+| 2 | Active | Modular refactor as primary task |
+| 3 | Planned | After Sprint 2 codebase is solid |
 
 ## Completed
 

@@ -147,4 +147,4 @@ NerdCam Application
 
 ## Development Approach
 
-Iterative hobby project. No formal sprints or deadlines. Priorities driven by what's most impactful or interesting at the time. SOLID/DRY/KISS principles. Single-file architecture works well for the current scope — only split when complexity demands it.
+Iterative hobby project using sprint-based planning (see `roadmap.md`). SOLID/DRY/KISS principles. The monolith (`nerdcam.py`, ~2200 lines) is being refactored into a modular Python package in Sprint 2 — complexity has reached the point where splitting is warranted.

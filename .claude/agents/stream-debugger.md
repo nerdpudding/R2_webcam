@@ -41,7 +41,7 @@ When information conflicts:
    - Current: hybrid MJPEG (mic off) + MSE/fMP4 (mic on, synced A/V)
    - WebRTC: lowest latency, most complex (not implemented)
    - HLS with short segments: simpler but adds segment latency (not implemented)
-   - RTSP relay: for credential-free RTSP passthrough (Sprint 2)
+   - RTSP relay: for credential-free RTSP passthrough (Sprint 3)
 
 5. **Camera RTSP behavior** — understand Foscam R2 RTSP quirks: session timeout, keepalive support, transport options (UDP/TCP), concurrent session limits.
 
