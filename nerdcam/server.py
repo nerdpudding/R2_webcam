@@ -25,6 +25,8 @@ class NerdCamServer:
 
     def __init__(self):
         self._server = None
+        self.shutting_down = False
+        self._active_procs = []  # track per-client ffmpeg processes
 
     @property
     def running(self):
@@ -41,10 +43,11 @@ class NerdCamServer:
             print(f"  Server already running on port {port}")
             return
 
+        self.shutting_down = False
         cam = config["camera"]
         cam_base = f"http://{cam['ip']}:{cam['port']}/cgi-bin/CGIProxy.fcgi"
 
-        handler = _make_handler(cam, cam_base, mjpeg, ctx)
+        handler = _make_handler(cam, cam_base, mjpeg, ctx, self)
 
         self._server = _ThreadedServer(("127.0.0.1", port), handler)
         thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -53,8 +56,16 @@ class NerdCamServer:
         print(f"  Server started on port {port}")
 
     def stop(self, mjpeg):
-        """Stop the server and MJPEG source."""
+        """Stop the server, MJPEG source, and all active stream processes."""
+        self.shutting_down = True
         mjpeg.stop()
+        # Kill all active per-client ffmpeg processes
+        for proc in self._active_procs:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        self._active_procs.clear()
         if self._server:
             self._server.shutdown()
             self._server = None
@@ -63,6 +74,17 @@ class NerdCamServer:
             return True
         print("  No server running.")
         return False
+
+    def register_proc(self, proc):
+        """Track a per-client ffmpeg process for cleanup on stop."""
+        self._active_procs.append(proc)
+
+    def unregister_proc(self, proc):
+        """Remove a finished per-client ffmpeg process."""
+        try:
+            self._active_procs.remove(proc)
+        except ValueError:
+            pass
 
 
 class ServerContext:
@@ -112,7 +134,7 @@ class _ThreadedServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
 
-def _make_handler(cam, cam_base, mjpeg, ctx):
+def _make_handler(cam, cam_base, mjpeg, ctx, server_instance):
     """Create a request handler class with access to server context."""
 
     class ProxyHandler(http.server.SimpleHTTPRequestHandler):
@@ -235,7 +257,7 @@ def _make_handler(cam, cam_base, mjpeg, ctx):
             try:
                 last_id = 0
                 no_frame_count = 0
-                while True:
+                while not server_instance.shutting_down:
                     fid = mjpeg.frame_id
                     frame = mjpeg.frame
                     if fid > last_id and frame is not None:
@@ -253,6 +275,8 @@ def _make_handler(cam, cam_base, mjpeg, ctx):
                         time.sleep(0.02)
                         no_frame_count += 1
                         if no_frame_count >= 100:
+                            if server_instance.shutting_down:
+                                break
                             log.warning("MJPEG client: %ds no frames, requesting source restart",
                                         no_frame_count // 50)
                             ctx.start_mjpeg(cam)
@@ -295,7 +319,8 @@ def _make_handler(cam, cam_base, mjpeg, ctx):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL
                 )
-                while True:
+                server_instance.register_proc(proc)
+                while not server_instance.shutting_down:
                     chunk = proc.stdout.read(4096)
                     if not chunk:
                         break
@@ -307,6 +332,7 @@ def _make_handler(cam, cam_base, mjpeg, ctx):
                 log.error("Audio stream error: %s", e)
             finally:
                 if proc:
+                    server_instance.unregister_proc(proc)
                     try:
                         proc.kill()
                     except Exception:
@@ -445,7 +471,8 @@ def _make_handler(cam, cam_base, mjpeg, ctx):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE
                 )
-                while True:
+                server_instance.register_proc(proc)
+                while not server_instance.shutting_down:
                     chunk = proc.stdout.read(4096)
                     if not chunk:
                         break
@@ -457,11 +484,8 @@ def _make_handler(cam, cam_base, mjpeg, ctx):
                 log.error("fMP4 stream error: %s", e)
             finally:
                 if proc:
+                    server_instance.unregister_proc(proc)
                     try:
-                        err = proc.stderr.read().decode(errors="replace").strip()
-                        if err:
-                            lines = [l for l in err.splitlines() if l.strip()][-5:]
-                            log.warning("fMP4 stream ffmpeg stderr:\n  %s", "\n  ".join(lines))
                         proc.kill()
                     except Exception:
                         pass

@@ -183,6 +183,15 @@ function ptzHome() {
 // Stream viewer with proper state tracking
 var _streamTimer = null;
 var _streaming = false;
+var _mjpegHealthTimer = null;
+var _lastMjpegFrameTime = 0;
+
+// Shared server health check — used by both MJPEG and MSE reconnect logic
+function _checkServer(callback) {
+    fetch("/api/snap?t=" + Date.now(), { method: "HEAD" })
+        .then(function(resp) { callback(resp.ok); })
+        .catch(function() { callback(false); });
+}
 
 // --- MSE (MediaSource Extensions) engine ---
 var _mseActive = false;
@@ -193,6 +202,8 @@ var _mseQueue = [];
 var _mseReconnTimer = null;
 var _mseAbortCtrl = null;
 var _mseLagTimer = null;
+var _mseHealthTimer = null;
+var _lastMseDataTime = 0;
 
 // Codec strings to try (camera sends H.264 High profile 1080p + AAC)
 var _mseCodecs = [
@@ -261,8 +272,21 @@ function _mseFetch() {
         .then(function(resp) {
             if (!resp.ok || !resp.body) { _mseReconnect(); return; }
             s.textContent = "LIVE"; s.className = "live";
+            _lastMseDataTime = Date.now();
             _mseReader = resp.body.getReader();
             _mseReadChunk();
+            // Health check for MSE stream
+            if (_mseHealthTimer) clearInterval(_mseHealthTimer);
+            _mseHealthTimer = setInterval(function() {
+                if (!_mseActive) { clearInterval(_mseHealthTimer); _mseHealthTimer = null; return; }
+                var age = Date.now() - _lastMseDataTime;
+                if (age > 5000) {
+                    clearInterval(_mseHealthTimer); _mseHealthTimer = null;
+                    log("MSE stale (" + (age/1000).toFixed(0) + "s), aborting stream");
+                    if (_mseAbortCtrl) { try { _mseAbortCtrl.abort(); } catch(e){} }
+                    _mseReconnect();
+                }
+            }, 2000);
         })
         .catch(function(e) {
             if (e.name !== "AbortError") {
@@ -280,6 +304,7 @@ function _mseReadChunk() {
             _mseReconnect();
             return;
         }
+        _lastMseDataTime = Date.now();
         _mseQueue.push(result.value);
         _mseProcessQueue();
         _mseReadChunk();
@@ -345,14 +370,31 @@ function _mseReconnect() {
     _mseReconnTimer = setTimeout(function() {
         _mseReconnTimer = null;
         if (!_mseActive) return;
-        // Reset MediaSource for clean reconnect
-        _mseCleanup();
-        _mseStart();
+        // Check if server is still reachable before reconnecting
+        _checkServer(function(alive) {
+            if (!_mseActive) return;
+            if (alive) {
+                _mseCleanup();
+                _mseStart();
+            } else {
+                // Server gone — clear video, show disconnected, keep trying
+                _mseCleanup();
+                var video = document.getElementById("camVideo");
+                video.style.display = "none";
+                s.textContent = "DISCONNECTED"; s.className = "stopped";
+                log("Server unreachable, retrying in 5s...");
+                _mseReconnTimer = setTimeout(function() {
+                    _mseReconnTimer = null;
+                    _mseReconnect();
+                }, 5000);
+            }
+        });
     }, 3000);
 }
 
 function _mseCleanup() {
     if (_mseLagTimer) { clearInterval(_mseLagTimer); _mseLagTimer = null; }
+    if (_mseHealthTimer) { clearInterval(_mseHealthTimer); _mseHealthTimer = null; }
     if (_mseReconnTimer) { clearTimeout(_mseReconnTimer); _mseReconnTimer = null; }
     if (_mseAbortCtrl) { try { _mseAbortCtrl.abort(); } catch(e){} _mseAbortCtrl = null; }
     _mseReader = null;
@@ -391,7 +433,9 @@ function _connectMjpeg() {
     var img = document.getElementById("camImage");
     var s = document.getElementById("statusText");
     s.textContent = "CONNECTING..."; s.className = "stopped";
+    _lastMjpegFrameTime = Date.now();
     img.onload = function() {
+        _lastMjpegFrameTime = Date.now();
         if (_streaming) { s.textContent = "LIVE"; s.className = "live"; }
     };
     img.onerror = function() {
@@ -403,6 +447,30 @@ function _connectMjpeg() {
         _streamTimer = setTimeout(_connectMjpeg, 3000);
     };
     img.src = "/api/mjpeg?t=" + Date.now();
+    // Health check: detect stale MJPEG (server stopped, no onerror triggered)
+    if (_mjpegHealthTimer) clearInterval(_mjpegHealthTimer);
+    _mjpegHealthTimer = setInterval(function() {
+        if (!_streaming || _mseActive) { clearInterval(_mjpegHealthTimer); return; }
+        var age = Date.now() - _lastMjpegFrameTime;
+        if (age > 5000) {
+            clearInterval(_mjpegHealthTimer);
+            _checkServer(function(alive) {
+                if (!_streaming || _mseActive) return;
+                if (alive) {
+                    log("MJPEG stale (" + (age/1000).toFixed(0) + "s), reconnecting...");
+                    s.textContent = "RECONNECTING..."; s.className = "stopped";
+                    img.onload = null; img.onerror = null; img.src = "";
+                    _streamTimer = setTimeout(_connectMjpeg, 2000);
+                } else {
+                    log("Server unreachable, disconnected");
+                    s.textContent = "DISCONNECTED"; s.className = "stopped";
+                    img.onload = null; img.onerror = null; img.src = "";
+                    // Keep checking periodically
+                    _streamTimer = setTimeout(_connectMjpeg, 5000);
+                }
+            });
+        }
+    }, 2000);
 }
 
 function startView() {
@@ -426,6 +494,7 @@ function startView() {
 function stopView() {
     _streaming = false;
     if (_streamTimer) { clearTimeout(_streamTimer); _streamTimer = null; }
+    if (_mjpegHealthTimer) { clearInterval(_mjpegHealthTimer); _mjpegHealthTimer = null; }
     _mseStop();
     _stopAudio();
     var img = document.getElementById("camImage");
