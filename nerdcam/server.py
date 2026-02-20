@@ -210,7 +210,7 @@ def _make_handler(cam, cam_base, mjpeg, ctx, server_instance):
                 return
 
             # Serve viewer page from template (server-side rendered, no file on disk)
-            if parsed.path in ("/nerdcam.html", "/", "/index.html"):
+            if parsed.path in ("/nerdcam", "/nerdcam.html", "/", "/index.html"):
                 self._handle_viewer()
                 return
 
