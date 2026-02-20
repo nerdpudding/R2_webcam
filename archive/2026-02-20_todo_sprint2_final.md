@@ -1,0 +1,52 @@
+# NerdCam — Tasks 2026-02-20
+
+## Priority 1: Code Review Before Continuing
+
+The Sprint 2 refactor session was long and messy. While the app appears functional, the code quality is not trusted. A full code review is needed before adding any new features.
+
+- [x] Create `code-reviewer` agent
+- [x] Full code review of all 12 modules in `nerdcam/` package
+  - Thread safety: added locks to `_active_procs` (server.py) and `PatrolController` (patrol.py)
+  - Dead code: removed credential injection from `_handle_viewer`, dead imports, unused `_viewer_server` global
+  - Config: fixed RTSP transport default (udp→tcp), `syncTime()` timezone bug
+  - Template: fixed `applyMicGain()` watchdog race, added motion select id
+  - Logging: raised console level to ERROR, converted recording.py prints to log calls, added toggle (default OFF)
+- [x] Complete globals-to-AppState migration (eliminated 10 module-level globals from cli.py)
+- [x] Fix issues found in code review
+- [ ] PTZ Go bug (needs camera testing)
+
+## Priority 2: Sprint 2 Completion
+
+- [x] Patrol UX overhaul: position indicators, progress bar, countdown, H:M:S time selects, mobile-friendly
+- [x] Full regression test (manual — all major features verified during development and debugging)
+- [x] Merge dev → main
+
+## Known Issues (parked)
+
+- Firefox MSE intermittent freeze (~13s then frozen frame, "manager is detached" warnings). Works fine in Chromium/Brave. Cannot reproduce reliably. Parked until Sprint 3 (WebRTC replaces MSE).
+
+## Completed (previous sessions)
+
+### Sprint 1 Closure
+- [x] Archive Sprint 1 plan, todo, and summary
+- [x] Update roadmap (Sprint 1 complete, Sprint 2/3 reshuffled)
+- [x] Update AI_INSTRUCTIONS.md (language rule, current priority)
+- [x] Doc-keeper audit — fix stale references (stream-debugger agent, concept.md, roadmap)
+
+### Sprint 2: Modular Refactor (Phases A-E)
+- [x] A1-A3: Package skeleton, crypto.py, camera_cgi.py
+- [x] B1-B2: state.py (AppState), config.py
+- [x] C1-C5: streaming.py, recording.py, patrol.py, ptz.py, camera_control.py
+- [x] D1: server.py (route dispatcher + structured error responses)
+- [x] E1-E2: cli.py cleanup, doc updates
+
+### Additional work done during Sprint 2
+- [x] Server-side rendered viewer (template in-memory, no file on disk)
+- [x] Remove `/api/stream` endpoint (redundant with fMP4)
+- [x] CLI menu restructure (toggle server, settings submenus)
+- [x] Cross-browser stream disconnect/reconnect (MJPEG watchdog, MSE health check)
+- [x] Fix `setVideoStreamParam` CGI (requires all params + streamType)
+- [x] VBR/CBR toggle in video settings
+- [x] ONVIF probe tool (`tools/onvif_probe.py`)
+- [x] Auto time sync on startup (DST-aware)
+- [x] Doc-keeper full audit and doc cleanup

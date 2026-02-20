@@ -9,10 +9,12 @@ NerdCam is a Python tool for controlling and streaming from a Foscam R2 IP camer
 - **SOLID, DRY, KISS** — keep it simple, don't over-engineer
 - **One source of truth** — no duplicating information across docs
 - **Never delete** — archive to `archive/` with date prefix
-- **Modularity** — single-file is fine while it works; split only when warranted
-- **English only** — all code, comments, docs, commit messages
+- **Modularity** — split into focused modules following SOLID principles
+- **ALL code, docs, comments, plans, and commit messages MUST be in English** — always, no exceptions. The user communicates in Dutch, but everything written to files must be English.
+- **Keep everything up to date** — after any change, verify that docs, agent instructions, and config files still reflect reality. Stale docs are worse than no docs.
+- **Learn from mistakes** — when an approach fails or wastes effort, document it in `docs/lessons_learned.md`. This file is persistent context for AI assistants to avoid repeating the same mistakes.
 - **Build on existing work** — read existing code and docs before changing anything
-- **Use agents** — check agents table below before starting specialized tasks
+- **Use agents** — check agents table below before starting specialized tasks. After changes that affect an agent's domain, update that agent's instructions.
 - **Local-first** — no cloud dependencies, everything runs on LAN
 - **Python stdlib preferred** — avoid pip dependencies for core functionality
 - **ffmpeg is the backbone** — all streaming/recording goes through ffmpeg subprocesses
@@ -35,8 +37,22 @@ NerdCam is a Python tool for controlling and streaming from a Foscam R2 IP camer
 R2_webcam/
 ├── AI_INSTRUCTIONS.md          # THIS FILE — AI rules, hierarchy, agents
 ├── README.md                   # User-facing overview, features, usage
-├── nerdcam.py                  # Main application (Python 3 + ffmpeg, ~2200 lines)
-├── nerdcam_template.html       # Web viewer HTML/JS template (injected at runtime)
+├── nerdcam.py                  # Thin launcher (imports nerdcam.cli.main)
+├── nerdcam/                    # Main application package
+│   ├── __init__.py             # Package marker + version
+│   ├── __main__.py             # python3 -m nerdcam support
+│   ├── cli.py                  # Entry point, menus, main loop
+│   ├── state.py                # AppState dataclass, constants, paths
+│   ├── crypto.py               # Encrypt/decrypt config (PBKDF2 + XOR)
+│   ├── config.py               # Load/save config, settings, onboarding
+│   ├── camera_cgi.py           # CGI helpers: cgi(), ok(), show_dict()
+│   ├── camera_control.py       # Stateless camera menus (image, IR, audio, etc.)
+│   ├── streaming.py            # MjpegSource class (shared ffmpeg MJPEG source)
+│   ├── recording.py            # Recorder class + codec detection
+│   ├── patrol.py               # PatrolController class (PTZ cycling)
+│   ├── ptz.py                  # PTZ menus, presets, patrol config
+│   └── server.py               # HTTP proxy server + route dispatcher
+├── nerdcam_template.html       # Web viewer HTML/JS template (served in-memory per request by the proxy server)
 ├── config.example.json         # Example config structure for reference
 ├── config.enc                  # Encrypted credentials (git-ignored)
 ├── nerdcam.log                 # Runtime log (git-ignored)
@@ -50,9 +66,12 @@ R2_webcam/
 ├── docs/                       # Analysis, diagnostics, technical docs
 │   ├── ISSUES_REPORT.md        # Current known issues and their status
 │   ├── STREAM_ANALYSIS.md      # Stream architecture analysis and findings
-│   └── TROUBLESHOOTING_PLAN.md # Diagnostic plans and test results
+│   └── lessons_learned.md      # What worked and didn't (context for AI assistants)
 │
 ├── recordings/                 # Local recording output (git-ignored)
+│
+├── tools/                      # Standalone utility scripts (not part of the app package)
+│   └── onvif_probe.py          # ONVIF capability query tool (queries camera hardware specs via WS-Security)
 │
 ├── claude_plans/               # Active plans from plan mode
 │
@@ -71,6 +90,7 @@ R2_webcam/
 |-------|-------------|
 | `doc-keeper` | After making changes — verify docs still match reality. Also for "clean up docs", "check consistency", or periodic maintenance sweeps. |
 | `stream-debugger` | When diagnosing stream issues: latency, sync, freezes, ffmpeg behavior, RTSP connectivity, quality. Also for evaluating architecture changes (WebRTC/MSE/HLS). |
+| `code-reviewer` | After completing a refactor, feature, or before merging. Produces a structured findings report — does NOT fix code. |
 
 ## Key Technical Context
 
@@ -89,13 +109,20 @@ NerdPudding is a separate AI processing app that consumes `/api/mjpeg` as its ca
 
 **Rule**: Any streaming architecture changes (MSE/WebRTC for Use Case 1) must leave `/api/mjpeg` completely untouched for Use Case 2.
 
+### Streaming Architecture (post-Sprint 1)
+- **Hybrid web viewer** — Mic OFF: MJPEG `<img>` (~1s latency, fast). Mic ON: MSE/fMP4 `<video>` (~3-3.5s latency, synced A/V). Auto-switches. Fallback to MJPEG if browser doesn't support MSE.
+- **`/api/fmp4` endpoint** — H.264 copy + AAC 128k in fragmented MP4. Per-client ffmpeg process. Used internally by web viewer MSE engine when mic is enabled.
+- **TCP default transport** — UDP post-timeout restarts failed 1-4 times. TCP has zero failures, reliable first-attempt recovery.
+- **A/V sync: resolved** — MSE/fMP4 provides inherently synchronized audio and video from a single ffmpeg process. Trade-off: ~3-3.5s latency vs MJPEG's ~1s video-only.
+
 ### Known Architectural Limitations
-- **A/V desync in browser** — video (`<img>` MJPEG, ~1s latency) and audio (`<Audio>` MP3, ~5s latency) are separate streams. Cannot be synced without architectural change (WebRTC/MSE/HLS). Only affects Use Case 1.
-- **Camera RTSP timeout** — Foscam R2 drops RTSP sessions every ~275s. Auto-recovery works but total visible freeze is ~7s (5s stale detection + 2s restart). Affects both use cases. RTSP keepalive may prevent this.
+- **Camera RTSP timeout** — Foscam R2 (firmware 2.71.1.81, final version) drops RTSP every ~275s. Confirmed unfixable: OPTIONS returns 501, GET_PARAMETER ignored, no CGI setting, no firmware update (end-of-life April 2022). Auto-recovery: ~4s total freeze (2s stale detection + 2s restart). TCP recovery is reliable on first attempt.
 - **MJPEG re-encodes** — `/api/mjpeg` transcodes H.264 to MJPEG, losing quality. By design for browser compatibility and NerdPudding's JPEG-native pipeline. Quality setting matters for AI inference.
+- **Concurrent RTSP session limit** — Camera returns "453 Not Enough Bandwidth" when too many sessions open. Typical usage: 1 shared MJPEG source + 1 fMP4 per browser client (when mic on) + recording = 3 sessions. Mic gain uses Apply button (not live slider) to avoid session exhaustion.
+- **MSE latency** — ~3-3.5s is inherent to the fMP4/MSE pipeline (fragmentation, browser buffering). Cannot be reduced without switching to WebRTC. Acceptable trade-off for synced A/V.
 
 ### Current Priority
-Reduce A/V latency and improve sync — may require rethinking streaming architecture. Work happens in a separate development branch. `/api/mjpeg` must remain stable throughout.
+Check `roadmap.md` for current sprint status and priorities. `/api/mjpeg` must remain stable throughout all changes.
 
 ## Plan Rules
 
@@ -122,7 +149,9 @@ Move to `archive/` with date prefix (e.g. `2026-02-19_plan_name.md`):
 
 Read order:
 1. This file (`AI_INSTRUCTIONS.md`)
-2. Today's task tracker (if exists)
-3. Active plans in `claude_plans/`
-4. `concepts/concept.md` for context
-5. Continue with the current task
+2. `docs/lessons_learned.md` — avoid repeating past mistakes
+3. Today's task tracker (if exists)
+4. Active plans in `claude_plans/`
+5. `concepts/concept.md` for context
+6. List contents of `claude_plans/`, `docs/`, `archive/` to know the full picture
+7. Continue with the current task

@@ -69,68 +69,61 @@ All credentials (camera IP, username, password, WiFi SSID, WiFi password) are st
 
 ## Main Menu
 
-After entering your master password, you'll see the main menu:
+After entering your master password, you'll see the main menu with server status, stream quality, and proxy URLs (when the server is running):
 
 | Option | Description |
 |--------|-------------|
-| **1. Open web viewer** | Starts the proxy server and opens the web viewer in your browser with live stream and full camera controls |
-| **2. Start stream server** | Starts the proxy server without opening the browser. Use this when you want other apps (VLC, OpenCV, etc.) to consume the stream |
-| **3. Show stream URLs** | Displays the local proxy URLs you can use in other applications |
-| **4. Advanced settings** | Opens the advanced settings submenu (see below) |
-| **5. Stop server** | Stops the proxy server |
-| **q. Quit** | Stops the server (if running) and exits |
+| **1. Start/Stop server** | Toggles the proxy server on or off. When running, the viewer and stream URLs are shown inline above the menu |
+| **2. Settings** | Opens the settings menu (see below) |
+| **q. Quit** | Stops the server (if running), stops recording and patrol, and exits |
 
-## Advanced Settings
+## Settings
 
-The advanced menu gives access to all camera features:
+The settings menu is organized into submenus:
 
-### Camera Control
+| Option | Submenu | What's inside |
+|--------|---------|---------------|
+| **1** | Camera | PTZ control (pan/tilt/presets/patrol), image settings, infrared, video encoding, motion detection, audio settings, OSD overlay |
+| **2** | Stream | Stream compression quality, mic gain, snapshot, watch in ffplay, test RTSP, show stream URLs |
+| **3** | Recording | Start/stop recording, codec selection, compression level, GPU selection |
+| **4** | Network | WiFi status, configure WiFi, port info |
+| **5** | System | Device info, time sync, reboot camera, raw CGI command, update credentials |
+| **6** | Toggle logging | Turn file logging on/off (defaults to OFF, writes to `nerdcam.log` when ON) |
+
+### Camera Submenu
 
 | Option | Feature | What it does |
 |--------|---------|-------------|
 | **1** | PTZ control | Pan, tilt, and zoom using a numpad-style layout (7=up-left, 8=up, 9=up-right, etc.). Manage speed, 4 preset positions, and automated patrol |
 | **2** | Image settings | Adjust brightness, contrast, saturation, sharpness (0-100 range). Toggle mirror and flip |
 | **3** | Infrared / night vision | Switch between auto mode (IR follows ambient light), force IR on, or force IR off |
-| **4** | Video settings | Change resolution (1080p, 720p, VGA, QVGA), framerate (1-30 FPS), bitrate, and keyframe interval. Changes apply instantly |
+| **4** | Video encoding | Change resolution (1080p, 720p, VGA, QVGA), framerate (1-30 FPS), bitrate, keyframe interval (GOP), VBR/CBR mode. Changes apply instantly |
 | **5** | Motion detection | Enable/disable motion detection and set sensitivity level |
-| **6** | Audio settings | Adjust volume (0-100), enable/disable sound alarm, test raw audio commands |
+| **6** | Audio settings | Adjust volume (0-100), enable/disable sound alarm |
+| **7** | OSD overlay | Toggle timestamp and camera name overlay on the video stream. Set the device name |
 
-### Stream
-
-| Option | Feature | What it does |
-|--------|---------|-------------|
-| **7** | Stream compression quality | Set MJPEG quality on a 1-10 scale (10=sharpest, 7=default, 1=lowest latency). Saved between sessions |
-| **8** | Watch stream in ffplay | Opens the live RTSP stream directly in ffplay or VLC |
-| **9** | Test RTSP (OpenCV) | Attempts to capture a single frame via OpenCV to verify the RTSP connection works |
-| **0** | Snapshot | Saves a JPEG snapshot from the camera to disk |
-
-### Audio
+### Stream Submenu
 
 | Option | Feature | What it does |
 |--------|---------|-------------|
-| **m** | Mic gain | Set audio volume multiplier (1.0-5.0x) for the microphone stream. Saved between sessions |
-
-### Overlay
-
-| Option | Feature | What it does |
-|--------|---------|-------------|
-| **o** | OSD overlay | Toggle timestamp and camera name overlay on the video stream. Set the device name |
+| **1** | Stream compression quality | Set MJPEG quality on a 1-10 scale (10=sharpest, 7=default, 1=lowest latency). Saved between sessions |
+| **2** | Mic gain | Set audio volume multiplier (1.0-5.0x) for the microphone stream. Saved between sessions |
+| **3** | Take snapshot | Saves a JPEG snapshot from the camera to disk |
+| **4** | Watch stream in ffplay | Opens the live RTSP stream directly in ffplay or VLC |
+| **5** | Test RTSP (OpenCV) | Attempts to capture a single frame via OpenCV to verify the RTSP connection works |
+| **6** | Show stream URLs | Displays the local proxy URLs for use in other applications |
 
 ### Recording
 
-| Option | Feature | What it does |
-|--------|---------|-------------|
-| **e** | Local recording | Start/stop recording to MP4 files in `recordings/`. Choose codec, compression level (1-10), and GPU. Auto-detects available encoders and GPUs |
-
-Recording settings are independent: **codec** (what encoder), **compression** (1=studio to 10=max compression), and **GPU** (which NVIDIA GPU, only shown with 2+ GPUs). Available codecs are detected at startup. Files are named `nerdcam_YYYYMMDD_HHMMSS.mp4`.
+Recording settings are independent: **codec** (what encoder), **compression** (1=studio to 10=max compression), and **GPU** (which NVIDIA GPU, only shown with 2+ GPUs). Available codecs are detected at startup. Files are named `nerdcam_YYYYMMDD_HHMMSS.mp4` and saved to `recordings/` (configurable output directory).
 
 ### Patrol
 
 Patrol automatically cycles the camera between preset positions with configurable dwell times. It runs server-side (daemon thread), so it survives browser close and only stops when the app exits or you explicitly stop it.
 
-**Web UI:** Inside the Pan/Tilt panel — Start/Stop button, status display (current position + cycle count), and a "Configure patrol..." toggle with dwell time inputs for each of the 4 positions.
+**Web UI:** Inside the Pan/Tilt panel — Start/Stop button, live status display (position indicators with active highlight, progress bar, countdown timer), and a "Configure patrol..." toggle with H:M:S time selects for each of the 4 positions. Mobile-friendly (native scroll pickers on touch devices).
 
-**CLI:** In PTZ menu: `t` = start patrol, `x` = stop patrol, `c` = configure patrol. Config format: `pos1:10,pos2:30,pos3:15,pos4:0` (position:dwell_seconds, 0 to skip).
+**CLI:** In Settings → Camera → PTZ control: `t` = start patrol, `x` = stop patrol, `c` = configure patrol. Config format: `pos1:10,pos2:30,pos3:15,pos4:0` (position:dwell_seconds, 0 to skip).
 
 **Auto-stop:** Patrol automatically stops when you manually move the camera (direction buttons or preset Go buttons) from either the web UI or CLI.
 
@@ -140,34 +133,16 @@ Patrol config is stored in the encrypted config file and persists between sessio
 {"positions": [{"name": "pos1", "dwell": 10}, {"name": "pos2", "dwell": 30}], "repeat": true}
 ```
 
-### Network
-
-| Option | Feature | What it does |
-|--------|---------|-------------|
-| **w** | WiFi status | Shows current WiFi connection info (SSID, encryption type, connected status) |
-| **n** | Configure WiFi | Scan for networks and apply WiFi settings (WPA2-PSK) to the camera |
-| **p** | Port info | Shows configured ports (HTTP, HTTPS, RTSP, ONVIF, media) |
-
-### System
-
-| Option | Feature | What it does |
-|--------|---------|-------------|
-| **i** | Device info | Shows device name, firmware version, hardware version |
-| **t** | Sync time | Sync the camera's clock from your PC |
-| **r** | Reboot camera | Reboots the camera (takes ~60 seconds to come back) |
-| **x** | Raw CGI command | Send any CGI command directly to the camera. Useful for exploring the API |
-| **c** | Update credentials | Change camera IP, username, password, WiFi SSID, or WiFi password. Automatically re-encrypted |
-
 ## Web Viewer
 
-Option **1** from the main menu opens a web-based control panel in your browser with:
+Start the server (option **1** from the main menu) and open the viewer URL shown inline (`http://localhost:8088/nerdcam.html`). The web viewer provides:
 
-- **Live stream** - MJPEG video feed with proper state tracking (CONNECTING / LIVE / RECONNECTING / STOPPED)
-- **Pan/Tilt controls** - Arrow buttons to move the camera, configurable PTZ duration and speed, 4 preset positions (Go buttons always visible, Save buttons hidden behind toggle with confirmation dialog), automated patrol with configurable dwell times
+- **Hybrid live stream** - MJPEG video (mic off, ~1s latency) or MSE/fMP4 synced audio+video (mic on, ~3-3.5s latency). Automatic switching, with MSE fallback to MJPEG for unsupported browsers. State tracking (CONNECTING / LIVE / RECONNECTING / STOPPED)
+- **Pan/Tilt controls** - Arrow buttons to move the camera, configurable PTZ duration and speed, preset positions (Go/Save), automated patrol with H:M:S time config, live position indicators, progress bar, and countdown
 - **Infrared toggle** - Auto, force on, force off
 - **Image adjustments** - Brightness, contrast, saturation, sharpness sliders, mirror/flip
 - **Video settings** - Resolution, framerate, bitrate controls
-- **Audio** - Enable/disable mic with adjustable gain (1.0-5.0x), auto-restarts stream on gain change
+- **Audio** - Enable/disable mic (switches to synced A/V stream), adjustable gain (1.0-5.0x) with Apply button
 - **OSD overlay** - Toggle timestamp and camera name overlay, set device name
 - **Recording** - Start/stop local recording with selectable quality preset (auto-detected from available encoders)
 - **Motion detection** - Enable/disable with sensitivity setting (detection only, events not captured)
@@ -178,13 +153,13 @@ The viewer runs on `http://localhost:8088` and communicates with the camera thro
 
 ## Proxy Stream URLs
 
-When the server is running (options 1 or 2), these local URLs are available:
+When the server is running (option 1 to start), these local URLs are available:
 
 | URL | Format | Use case |
 |-----|--------|----------|
-| `http://localhost:8088/api/mjpeg` | MJPEG (video only) | Browsers, OpenCV, other apps that consume MJPEG |
-| `http://localhost:8088/api/stream` | MPEG-TS (video + audio) | VLC, ffplay, media players |
-| `http://localhost:8088/api/audio` | MP3 (audio only) | Browser audio playback |
+| `http://localhost:8088/api/mjpeg` | MJPEG (video only) | Browsers, OpenCV, NerdPudding, other apps that consume MJPEG |
+| `http://localhost:8088/api/fmp4` | Fragmented MP4 (video + audio) | VLC, ffplay, browser MSE (web viewer with mic on) |
+| `http://localhost:8088/api/audio` | MP3 (audio only) | Browser audio playback (legacy, superseded by MSE for synced A/V) |
 | `http://localhost:8088/api/snap` | Single JPEG | Quick snapshot from any HTTP client |
 | `http://localhost:8088/api/settings` | JSON | Read/write app settings (mic gain, recording quality) |
 | `http://localhost:8088/api/record?action=X` | JSON | Start/stop/status for local recording |
@@ -195,7 +170,7 @@ These URLs require **no credentials** - the proxy adds them server-side. Any app
 
 ```bash
 # Examples
-vlc http://localhost:8088/api/stream
+vlc http://localhost:8088/api/fmp4
 ffplay http://localhost:8088/api/mjpeg
 ```
 
@@ -256,9 +231,10 @@ Key docs:
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `nerdcam.py` | Main application (Python 3 + ffmpeg) |
+| File / Directory | Purpose |
+|------------------|---------|
+| `nerdcam.py` | Thin launcher — `python3 nerdcam.py` entry point (imports `nerdcam.cli`) |
+| `nerdcam/` | Main application package (12 modules: cli, server, streaming, recording, patrol, ptz, camera_control, config, state, crypto, camera_cgi, + __init__ / __main__) |
 | `nerdcam_template.html` | HTML/JS template for the web viewer |
 | `config.example.json` | Example config structure (copy to `config.json` to pre-fill defaults, or just run the app) |
 | `recordings/` | Local recording output directory (created automatically, git-ignored) |
