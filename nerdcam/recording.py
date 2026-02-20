@@ -4,7 +4,6 @@ Handles codec detection, GPU enumeration, and ffmpeg-based recording
 of RTSP streams to local MP4 files.
 """
 
-import atexit
 import datetime
 import logging
 import os

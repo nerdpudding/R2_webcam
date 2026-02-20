@@ -63,9 +63,6 @@ class AppState:
     master_pwd: Optional[str] = None
     config: Optional[dict] = None
 
-    # Server
-    viewer_server: Any = None
-
     # Stream settings (persisted in config.enc)
     stream_quality: int = 7
     mic_gain: float = 3.0

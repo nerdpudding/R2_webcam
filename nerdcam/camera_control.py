@@ -4,6 +4,7 @@ All functions take a config dict and communicate with the camera
 via CGI commands. No server or streaming state dependencies.
 """
 
+import datetime
 import getpass
 import os
 import subprocess
@@ -127,18 +128,15 @@ def sync_time(config, quiet=False):
 
     quiet: if True, only print errors (for auto-sync on startup).
     """
-    import datetime as _dt
-    import time as _time
-
     if not quiet:
         _cls()
     print("--- Sync Time ---")
-    now = _dt.datetime.now()
+    now = datetime.datetime.now()
 
     if not quiet:
         utc_offset = int(now.astimezone().utcoffset().total_seconds())
         sign = "+" if utc_offset >= 0 else ""
-        dst_label = " (DST)" if _time.localtime().tm_isdst else ""
+        dst_label = " (DST)" if time.localtime().tm_isdst else ""
         print(f"  PC time: {now.strftime('%Y-%m-%d %H:%M:%S')} "
               f"(UTC{sign}{utc_offset // 3600}){dst_label}")
 
@@ -511,10 +509,10 @@ def raw_command(config):
 
 
 
-def show_stream_url(config, viewer_server):
+def show_stream_url(config, server_running):
     _cls()
     print("--- Stream URLs (no credentials needed) ---")
-    if viewer_server is None:
+    if not server_running:
         print("  WARNING: Server not running! Start it first.\n")
     print("  VIDEO ONLY (lowest latency, ~1s):")
     print("    http://localhost:8088/api/mjpeg")
@@ -596,5 +594,6 @@ def update_credentials(config, save_config_fn):
 def _rtsp_url(config) -> str:
     cam = config["camera"]
     data = cgi("getPortInfo", config)
-    rtsp_port = data.get("rtspPort", str(cam["port"]))
+    # Fallback to port 88 (Foscam R2 default RTSP port matches HTTP port)
+    rtsp_port = data.get("rtspPort", "88")
     return f"rtsp://{cam['username']}:{cam['password']}@{cam['ip']}:{rtsp_port}/videoMain"

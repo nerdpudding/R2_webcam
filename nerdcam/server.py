@@ -1,12 +1,13 @@
 """HTTP proxy server for NerdCam.
 
 Serves the web viewer, proxies camera CGI commands (hiding credentials),
-and provides streaming endpoints (MJPEG, fMP4, MPEG-TS, audio).
+and provides streaming endpoints (MJPEG, fMP4, audio).
 """
 
 import http.server
 import json
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -27,6 +28,7 @@ class NerdCamServer:
         self._server = None
         self.shutting_down = False
         self._active_procs = []  # track per-client ffmpeg processes
+        self._procs_lock = threading.Lock()  # guards _active_procs
 
     @property
     def running(self):
@@ -60,12 +62,14 @@ class NerdCamServer:
         self.shutting_down = True
         mjpeg.stop()
         # Kill all active per-client ffmpeg processes
-        for proc in self._active_procs:
+        with self._procs_lock:
+            procs_snapshot = list(self._active_procs)
+            self._active_procs.clear()
+        for proc in procs_snapshot:
             try:
                 proc.kill()
             except Exception:
                 pass
-        self._active_procs.clear()
         if self._server:
             self._server.shutdown()
             self._server = None
@@ -77,14 +81,16 @@ class NerdCamServer:
 
     def register_proc(self, proc):
         """Track a per-client ffmpeg process for cleanup on stop."""
-        self._active_procs.append(proc)
+        with self._procs_lock:
+            self._active_procs.append(proc)
 
     def unregister_proc(self, proc):
         """Remove a finished per-client ffmpeg process."""
-        try:
-            self._active_procs.remove(proc)
-        except ValueError:
-            pass
+        with self._procs_lock:
+            try:
+                self._active_procs.remove(proc)
+            except ValueError:
+                pass
 
 
 class ServerContext:
@@ -506,19 +512,14 @@ def _make_handler(cam, cam_base, mjpeg, ctx, server_instance):
                         pass
 
         def _handle_viewer(self):
-            """Serve the web viewer, rendered from template with credentials."""
-            import os
+            """Serve the web viewer from template (no credentials in HTML)."""
             template = os.path.join(PROJECT_DIR, "nerdcam_template.html")
             try:
-                with open(template) as f:
+                with open(template, encoding="utf-8") as f:
                     html = f.read()
             except FileNotFoundError:
                 self._error_json(404, "Viewer template not found")
                 return
-            html = html.replace("__CAM_HOST__", cam["ip"])
-            html = html.replace("__CAM_PORT__", str(cam["port"]))
-            html = html.replace("__CAM_USER__", cam["username"])
-            html = html.replace("__CAM_PASS__", cam["password"])
             body = html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")

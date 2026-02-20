@@ -59,8 +59,8 @@ def load_settings(state):
     settings = config.get("settings", {})
     state.stream_quality = settings.get("stream_quality", 7)
     state.mic_gain = settings.get("mic_gain", 3.0)
-    rt = settings.get("rtsp_transport", "udp")
-    state.rtsp_transport = rt if rt in ("udp", "tcp") else "udp"
+    rt = settings.get("rtsp_transport", "tcp")
+    state.rtsp_transport = rt if rt in ("udp", "tcp") else "tcp"
     rc = settings.get("rec_codec", state.default_rec_codec)
     state.rec_codec = rc if rc in state.rec_codecs else state.default_rec_codec
     comp = settings.get("rec_compression", 5)

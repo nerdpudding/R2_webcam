@@ -697,6 +697,8 @@ function applyMicGain() {
     fetch("/api/settings?mic_gain=" + val).then(function() {
         log("Mic gain applied: " + val + "x");
         if (_mseActive) {
+            // Stop MJPEG watchdog to prevent it from reconnecting during MSE restart
+            if (_mjpegWatchdog) { clearInterval(_mjpegWatchdog); _mjpegWatchdog = null; }
             // Cleanly switch: stop MSE, then restart with new gain
             _mseStop();
             var img = document.getElementById("camImage");
@@ -850,14 +852,15 @@ function checkRecordingStatus() {
 
 // Sync camera time from browser
 function syncTime() {
+    // Foscam R2 subtracts timeZone from the provided time, so always send
+    // timeZone=0 with local time to avoid double-offset. See camera_control.py.
     var now = new Date();
-    var offset = -now.getTimezoneOffset() * 60;
     send("setSystemTime",
         "timeSource=1" +
         "&ntpServer=" +
         "&dateFormat=0" +
         "&timeFormat=1" +
-        "&timeZone=" + offset +
+        "&timeZone=0" +
         "&isDst=0" +
         "&dst=0" +
         "&year=" + now.getFullYear() +
@@ -1164,7 +1167,7 @@ function init() {
                 </div>
                 <div class="setting">
                     <label>Sensitivity</label>
-                    <select onchange="motionSensitivity(this.value)">
+                    <select id="selMotionSens" onchange="motionSensitivity(this.value)">
                         <option value="2">High</option>
                         <option value="1" selected>Medium</option>
                         <option value="0">Low</option>
