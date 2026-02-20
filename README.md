@@ -121,7 +121,7 @@ Recording settings are independent: **codec** (what encoder), **compression** (1
 
 Patrol automatically cycles the camera between preset positions with configurable dwell times. It runs server-side (daemon thread), so it survives browser close and only stops when the app exits or you explicitly stop it.
 
-**Web UI:** Inside the Pan/Tilt panel — Start/Stop button, status display (current position + cycle count), and a "Configure patrol..." toggle with dwell time inputs for each of the 4 positions.
+**Web UI:** Inside the Pan/Tilt panel — Start/Stop button, live status display (position indicators with active highlight, progress bar, countdown timer), and a "Configure patrol..." toggle with H:M:S time selects for each of the 4 positions. Mobile-friendly (native scroll pickers on touch devices).
 
 **CLI:** In Settings → Camera → PTZ control: `t` = start patrol, `x` = stop patrol, `c` = configure patrol. Config format: `pos1:10,pos2:30,pos3:15,pos4:0` (position:dwell_seconds, 0 to skip).
 
@@ -138,7 +138,7 @@ Patrol config is stored in the encrypted config file and persists between sessio
 Start the server (option **1** from the main menu) and open the viewer URL shown inline (`http://localhost:8088/nerdcam.html`). The web viewer provides:
 
 - **Hybrid live stream** - MJPEG video (mic off, ~1s latency) or MSE/fMP4 synced audio+video (mic on, ~3-3.5s latency). Automatic switching, with MSE fallback to MJPEG for unsupported browsers. State tracking (CONNECTING / LIVE / RECONNECTING / STOPPED)
-- **Pan/Tilt controls** - Arrow buttons to move the camera, configurable PTZ duration and speed, preset positions (Go/Save), automated patrol with configurable dwell times
+- **Pan/Tilt controls** - Arrow buttons to move the camera, configurable PTZ duration and speed, preset positions (Go/Save), automated patrol with H:M:S time config, live position indicators, progress bar, and countdown
 - **Infrared toggle** - Auto, force on, force off
 - **Image adjustments** - Brightness, contrast, saturation, sharpness sliders, mirror/flip
 - **Video settings** - Resolution, framerate, bitrate controls

@@ -89,6 +89,36 @@ body {
     height: 130px; overflow-y: auto; white-space: pre-wrap;
     word-break: break-all; color: #7f8c8d;
 }
+.patrol-time-row {
+    display: flex; align-items: center; gap: 4px; margin: 3px 0;
+}
+.patrol-time-label {
+    font-size: 0.68em; color: #7f8c8d; width: 22px; flex-shrink: 0;
+}
+.patrol-time-inputs {
+    display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0;
+}
+.patrol-time-inputs select {
+    flex: 1; min-width: 0; width: 0;
+    background: #1a1a2e; border: 1px solid #0f3460; color: #eee;
+    padding: 4px 1px; border-radius: 3px; font-size: 0.75em;
+    text-align: center; -webkit-appearance: none; appearance: none;
+}
+.patrol-time-inputs span {
+    font-size: 0.6em; color: #7f8c8d; flex-shrink: 0;
+}
+.patrol-dot {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; border-radius: 3px; font-size: 0.7em;
+    background: #1a1a2e; color: #555; border: 1px solid #0f3460;
+    transition: all 0.3s;
+}
+.patrol-dot.active {
+    background: #e94560; color: #fff; border-color: #e94560;
+}
+.patrol-dot.skipped {
+    opacity: 0.3;
+}
 </style>
 <script>
 var C = { ptzDur: 500 };
@@ -911,6 +941,15 @@ function togglePatrol() {
     });
 }
 
+function formatTime(sec) {
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    var s = sec % 60;
+    if (h > 0) return h + "h " + m + "m " + s + "s";
+    if (m > 0) return m + "m " + s + "s";
+    return s + "s";
+}
+
 function updatePatrolUI(d) {
     var btn = document.getElementById("btnPatrol");
     var status = document.getElementById("patrolStatus");
@@ -918,7 +957,29 @@ function updatePatrolUI(d) {
         btn.textContent = "Stop Patrol";
         btn.classList.add("danger");
         status.style.display = "block";
-        status.textContent = "Position: " + (d.current_pos || "...") + " | Cycle: " + d.cycle;
+        var pos = d.current_pos || "";
+        var remaining = Math.round(d.dwell_remaining || 0);
+        var total = Math.round(d.dwell_total || 0);
+        var pct = total > 0 ? Math.round(((total - remaining) / total) * 100) : 0;
+        // Update position dots
+        var posNum = pos ? parseInt(pos.replace("pos", ""), 10) : 0;
+        for (var i = 1; i <= 4; i++) {
+            var dot = document.getElementById("pp" + i);
+            if (!dot) continue;
+            dot.className = "patrol-dot";
+            if (i === posNum) dot.classList.add("active");
+            // Mark skipped positions (time=0) if config is loaded
+            if (getPatrolSeconds(i) <= 0) dot.classList.add("skipped");
+        }
+        // Update label and progress bar
+        var label = document.getElementById("patrolLabel");
+        var bar = document.getElementById("patrolBar");
+        if (pos) {
+            label.textContent = "\u2192 Pos " + posNum + "  " + formatTime(remaining);
+        } else {
+            label.textContent = "Starting...";
+        }
+        if (bar) bar.style.width = pct + "%";
         if (!_patrolTimer) {
             _patrolTimer = setInterval(pollPatrolStatus, 2000);
         }
@@ -942,20 +1003,53 @@ function loadPatrolConfig() {
         var cfg = d.config || {};
         var positions = cfg.positions || [];
         for (var i = 0; i < positions.length; i++) {
-            var el = document.getElementById("patrolDwell" + (i + 1));
-            if (el) el.value = positions[i].dwell || 0;
+            setPatrolHMS(i + 1, positions[i].dwell || 0);
         }
         var rep = document.getElementById("patrolRepeat");
         if (rep) rep.checked = cfg.repeat !== false;
     }).catch(function() {});
 }
 
+function fillSelect(el, max) {
+    for (var v = 0; v <= max; v++) {
+        var opt = document.createElement("option");
+        opt.value = v;
+        opt.textContent = v;
+        el.appendChild(opt);
+    }
+}
+
+function initPatrolSelects() {
+    for (var i = 1; i <= 4; i++) {
+        fillSelect(document.getElementById("patrolH" + i), 23);
+        fillSelect(document.getElementById("patrolM" + i), 59);
+        fillSelect(document.getElementById("patrolS" + i), 59);
+    }
+}
+
+function getPatrolSeconds(i) {
+    var h = parseInt(document.getElementById("patrolH" + i).value) || 0;
+    var m = parseInt(document.getElementById("patrolM" + i).value) || 0;
+    var s = parseInt(document.getElementById("patrolS" + i).value) || 0;
+    return h * 3600 + m * 60 + s;
+}
+
+function setPatrolHMS(i, totalSec) {
+    var h = Math.floor(totalSec / 3600);
+    var m = Math.floor((totalSec % 3600) / 60);
+    var s = totalSec % 60;
+    var eh = document.getElementById("patrolH" + i);
+    var em = document.getElementById("patrolM" + i);
+    var es = document.getElementById("patrolS" + i);
+    if (eh) eh.value = h;
+    if (em) em.value = m;
+    if (es) es.value = s;
+}
+
 function savePatrolConfig() {
     var positions = [];
     for (var i = 1; i <= 4; i++) {
-        var el = document.getElementById("patrolDwell" + i);
-        var dwell = el ? parseInt(el.value) || 0 : 0;
-        positions.push({"name": "pos" + i, "dwell": dwell});
+        positions.push({"name": "pos" + i, "dwell": getPatrolSeconds(i)});
     }
     var repeat = document.getElementById("patrolRepeat").checked;
     fetch("/api/patrol?action=config&positions=" + encodeURIComponent(JSON.stringify(positions)) + "&repeat=" + repeat)
@@ -981,6 +1075,7 @@ function init() {
     loadIR();
     loadOSD();
     checkRecordingStatus();
+    initPatrolSelects();
     loadPatrolConfig();
     send("getPTZSpeed", null, function(r) {
         if (r.speed !== undefined) {
@@ -1055,16 +1150,27 @@ function init() {
                     <div class="btn-row">
                         <button class="btn" id="btnPatrol" onclick="togglePatrol()">Start Patrol</button>
                     </div>
-                    <div id="patrolStatus" style="font-size:0.65em;color:#7f8c8d;margin-top:2px;display:none;"></div>
+                    <div id="patrolStatus" style="font-size:0.65em;margin-top:4px;display:none;">
+                        <div style="display:flex;gap:4px;margin-bottom:3px;" id="patrolPosRow">
+                            <span class="patrol-dot" id="pp1">1</span>
+                            <span class="patrol-dot" id="pp2">2</span>
+                            <span class="patrol-dot" id="pp3">3</span>
+                            <span class="patrol-dot" id="pp4">4</span>
+                        </div>
+                        <div id="patrolLabel" style="color:#ccc;margin-bottom:2px;"></div>
+                        <div style="background:#1a1a2e;border-radius:2px;height:4px;">
+                            <div id="patrolBar" style="background:#e94560;height:100%;border-radius:2px;width:0%;transition:width 0.5s;"></div>
+                        </div>
+                    </div>
                     <a href="#" onclick="var s=document.getElementById('patrolConfigSection');s.style.display=s.style.display==='none'?'block':'none';this.textContent=s.style.display==='none'?'Configure patrol...':'Hide config';return false" style="font-size:0.65em;color:#e94560;display:block;margin:3px 0;">Configure patrol...</a>
                     <div id="patrolConfigSection" style="display:none">
-                        <div class="setting"><label>Pos 1 dwell</label><input type="number" id="patrolDwell1" value="0" min="0" max="300" style="width:50px"> <span style="font-size:0.65em;color:#7f8c8d">sec</span></div>
-                        <div class="setting"><label>Pos 2 dwell</label><input type="number" id="patrolDwell2" value="0" min="0" max="300" style="width:50px"> <span style="font-size:0.65em;color:#7f8c8d">sec</span></div>
-                        <div class="setting"><label>Pos 3 dwell</label><input type="number" id="patrolDwell3" value="0" min="0" max="300" style="width:50px"> <span style="font-size:0.65em;color:#7f8c8d">sec</span></div>
-                        <div class="setting"><label>Pos 4 dwell</label><input type="number" id="patrolDwell4" value="0" min="0" max="300" style="width:50px"> <span style="font-size:0.65em;color:#7f8c8d">sec</span></div>
+                        <div class="patrol-time-row"><span class="patrol-time-label">P1</span><div class="patrol-time-inputs"><select id="patrolH1"></select><span>h</span><select id="patrolM1"></select><span>m</span><select id="patrolS1"></select><span>s</span></div></div>
+                        <div class="patrol-time-row"><span class="patrol-time-label">P2</span><div class="patrol-time-inputs"><select id="patrolH2"></select><span>h</span><select id="patrolM2"></select><span>m</span><select id="patrolS2"></select><span>s</span></div></div>
+                        <div class="patrol-time-row"><span class="patrol-time-label">P3</span><div class="patrol-time-inputs"><select id="patrolH3"></select><span>h</span><select id="patrolM3"></select><span>m</span><select id="patrolS3"></select><span>s</span></div></div>
+                        <div class="patrol-time-row"><span class="patrol-time-label">P4</span><div class="patrol-time-inputs"><select id="patrolH4"></select><span>h</span><select id="patrolM4"></select><span>m</span><select id="patrolS4"></select><span>s</span></div></div>
                         <div class="setting"><label>Repeat</label><input type="checkbox" id="patrolRepeat" checked style="width:auto"></div>
                         <button class="btn" onclick="savePatrolConfig()">Save Config</button>
-                        <p style="font-size:0.55em;color:#555;margin-top:2px;">Set dwell to 0 to skip a position. Need 2+ positions with dwell &gt; 0.</p>
+                        <p style="font-size:0.55em;color:#555;margin-top:2px;">Time = travel + hold. Set all to 0 to skip. Need 2+ active. If the camera doesn't reach a position, increase its time.</p>
                     </div>
                 </div>
             </div>

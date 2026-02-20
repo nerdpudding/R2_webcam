@@ -90,6 +90,7 @@ R2_webcam/
 |-------|-------------|
 | `doc-keeper` | After making changes — verify docs still match reality. Also for "clean up docs", "check consistency", or periodic maintenance sweeps. |
 | `stream-debugger` | When diagnosing stream issues: latency, sync, freezes, ffmpeg behavior, RTSP connectivity, quality. Also for evaluating architecture changes (WebRTC/MSE/HLS). |
+| `code-reviewer` | After completing a refactor, feature, or before merging. Produces a structured findings report — does NOT fix code. |
 
 ## Key Technical Context
 

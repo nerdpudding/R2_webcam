@@ -133,3 +133,13 @@ Ongoing log of what worked and what didn't during development. Primarily intende
 **Rule:** When updating roadmap or plans, also check agent instructions and concept docs for stale references. Use the doc-keeper agent proactively.
 
 ---
+
+## Use `<select>` for mobile-friendly number inputs in the web viewer
+
+**Lesson:** Native `<select>` elements trigger scroll wheel pickers on iOS/Android, making them much more usable on touch devices than `<input type="number">` (which has tiny spinners). For bounded numeric values in the web viewer, `<select>` with JS-populated options is the right pattern.
+
+**Example (Sprint 2):** The patrol time config initially used `<input type="number">` with 32px width — values were unreadable and spinners were untappable on mobile. Replaced with `<select>` elements populated via JS (`fillSelect(el, max)`), which use native scroll pickers on mobile and dropdowns on desktop.
+
+**Rule:** For time/number inputs in the web viewer that need to work on mobile, prefer `<select>` over `<input type="number">`. Native scroll pickers are a feature, not a limitation.
+
+---

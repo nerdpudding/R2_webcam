@@ -26,8 +26,9 @@
 - [x] PTZ patrol improvements (partial — obvious fixes during patrol.py extraction, rest to Sprint 3)
 - [x] Improve server error responses (structured JSON errors)
 - [x] Auto time sync on startup (DST-aware)
-- [ ] Merge dev → main after refactor complete
-- [ ] Full regression test
+- [x] Patrol UX overhaul: position indicators, progress bar, countdown, H:M:S time selects, mobile-friendly
+- [x] Full regression test (manual — all major features verified)
+- [x] Merge dev → main after refactor complete
 
 ## Sprint 3: WebRTC + Features
 
@@ -55,7 +56,7 @@ go2rtc solves three problems at once: WebRTC, RTSP relay, and 2-way audio.
 ### Features
 - [ ] NerdPudding stream optimization — reduce latency contribution to end-to-end pipeline
 - [ ] Image preprocessing pipeline (lighting/contrast adjustments before streaming to NerdPudding)
-- [ ] PTZ patrol improvements
+- [ ] PTZ Go bug — fix preset name mismatch between save/goto CGI commands (needs camera testing)
 - [ ] Improve error messages and recovery feedback in web UI (frontend)
 - [x] Fix video settings CGI — required all params + streamType together, GOP/bitrate now adjustable
 - [ ] Consider alternative camera models / generic ONVIF support
@@ -76,8 +77,8 @@ go2rtc solves three problems at once: WebRTC, RTSP relay, and 2-way audio.
 | Sprint | Status | Notes |
 |--------|--------|-------|
 | 1 | Complete | All items done. PTZ Go bug moved to Sprint 2. |
-| 2 | Near complete | Refactor + code review done. PTZ Go bug and regression test remaining, then merge to main. |
-| 3 | Planned | WebRTC (go2rtc/mediamtx), features. After Sprint 2 merge. |
+| 2 | Complete | Refactor, code review, patrol UX, regression test done. PTZ Go bug moved to Sprint 3. |
+| 3 | Planned | WebRTC (go2rtc/mediamtx), features, PTZ Go bug. |
 | 4 | Planned | Raspberry Pi 4 dedicated appliance build |
 
 ## Completed
@@ -100,3 +101,4 @@ go2rtc solves three problems at once: WebRTC, RTSP relay, and 2-way audio.
 - [x] Configurable recording output directory (network drive support)
 - [x] Structured JSON error responses from proxy server
 - [x] Auto time sync on startup (DST-aware)
+- [x] Patrol UX overhaul: visual position indicators, progress bar, countdown display, H:M:S time selects (mobile-friendly)

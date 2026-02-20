@@ -70,6 +70,8 @@ class PatrolController:
                 "running": self.running,
                 "current_pos": self._status.get("current_pos", ""),
                 "cycle": self._status.get("cycle", 0),
+                "dwell_total": self._status.get("dwell_total", 0),
+                "dwell_remaining": self._status.get("dwell_remaining", 0),
             }
 
     def cleanup(self):
@@ -92,18 +94,24 @@ class PatrolController:
                     continue
                 with self._lock:
                     self._status["current_pos"] = name
+                    self._status["dwell_total"] = dwell
+                    self._status["dwell_remaining"] = dwell
                 cgi("ptzGotoPresetPoint", config, name=name)
                 # Sleep in 100ms increments for fast stop response
                 elapsed = 0.0
                 while elapsed < dwell and self.running:
                     time.sleep(0.1)
                     elapsed += 0.1
+                    with self._lock:
+                        self._status["dwell_remaining"] = max(0, dwell - elapsed)
             if not repeat:
                 break
         self.running = False
         with self._lock:
             self._status["running"] = False
             self._status["current_pos"] = ""
+            self._status["dwell_total"] = 0
+            self._status["dwell_remaining"] = 0
 
 
 def get_patrol_config(config):
