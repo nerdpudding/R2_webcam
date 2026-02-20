@@ -115,6 +115,10 @@ def goto_preset(config):
 def add_preset(config):
     name = input("  New preset name: ").strip()
     if name:
+        # Foscam ignores add if name exists, so delete first to allow overwrite.
+        # 1s delay needed: firmware needs time to finalize the delete.
+        cgi("ptzDeletePresetPoint", config, name=name)
+        time.sleep(1)
         data = cgi("ptzAddPresetPoint", config, name=name)
         ok(data, f"ptzAddPresetPoint({name})")
 
