@@ -77,7 +77,7 @@ go2rtc solves three problems at once: WebRTC, RTSP relay, and 2-way audio.
 | Sprint | Status | Notes |
 |--------|--------|-------|
 | 1 | Complete | All items done. PTZ Go bug moved to Sprint 2. |
-| 2 | Complete | Refactor, code review, patrol UX, regression test done. PTZ Go bug moved to Sprint 3. |
+| 2 | Complete | Refactor, code review, patrol UX, regression test done. Merged to main. PTZ Go bug moved to Sprint 3. |
 | 3 | Planned | WebRTC (go2rtc/mediamtx), features, PTZ Go bug. |
 | 4 | Planned | Raspberry Pi 4 dedicated appliance build |
 
