@@ -18,7 +18,7 @@
 
 ## Sprint 2: Modular Refactor + Quality of Life
 
-**Goal:** Refactor monolith into a proper Python package with SOLID modules. Fix remaining bugs and add small QoL improvements that naturally fit during the refactor. See `claude_plans/PLAN_sprint2_modular_refactor.md` for full plan.
+**Goal:** Refactor monolith into a proper Python package with SOLID modules. Fix remaining bugs and add small QoL improvements that naturally fit during the refactor. See `archive/2026-02-20_PLAN_sprint2_modular_refactor.md` for full plan.
 
 - [x] Refactor `nerdcam.py` → `nerdcam/` package (12 modules, AppState dataclass)
 - [ ] PTZ preset Go buttons — fix name mismatch between save/goto CGI commands (needs camera testing)
@@ -76,7 +76,7 @@ go2rtc solves three problems at once: WebRTC, RTSP relay, and 2-way audio.
 | Sprint | Status | Notes |
 |--------|--------|-------|
 | 1 | Complete | All items done. PTZ Go bug moved to Sprint 2. |
-| 2 | Near complete | Refactor done. PTZ Go bug and regression test remaining, then merge to main. |
+| 2 | Near complete | Refactor + code review done. PTZ Go bug and regression test remaining, then merge to main. |
 | 3 | Planned | WebRTC (go2rtc/mediamtx), features. After Sprint 2 merge. |
 | 4 | Planned | Raspberry Pi 4 dedicated appliance build |
 
@@ -94,8 +94,9 @@ go2rtc solves three problems at once: WebRTC, RTSP relay, and 2-way audio.
 - [x] UDP probesize fix for reliable stream startup
 - [x] TCP default transport for reliable post-timeout recovery
 - [x] MSE/fMP4 hybrid streaming (synced A/V in web viewer)
-- [x] Comprehensive logging
+- [x] File logging with toggle (default OFF, enable via Settings)
 - [x] Modular Python package (`nerdcam/` — 12 modules, AppState dataclass)
+- [x] Code review: thread safety, globals-to-AppState migration, dead code cleanup
 - [x] Configurable recording output directory (network drive support)
 - [x] Structured JSON error responses from proxy server
 - [x] Auto time sync on startup (DST-aware)
