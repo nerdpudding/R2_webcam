@@ -1,10 +1,15 @@
 """PTZ control, presets, and patrol config menu for NerdCam."""
 
+import os
 import time
 import urllib.parse
 
 from nerdcam.camera_cgi import cgi, ok
 from nerdcam.patrol import get_patrol_config, save_patrol_config
+
+
+def _cls():
+    os.system("clear" if os.name != "nt" else "cls")
 
 
 def ptz_menu(config, patrol, save_config_fn):
@@ -13,7 +18,8 @@ def ptz_menu(config, patrol, save_config_fn):
     patrol: PatrolController instance
     save_config_fn: callable to persist config changes
     """
-    print("\n--- PTZ Control ---")
+    _cls()
+    print("--- PTZ Control ---")
     print("  Movement:  7=UL  8=U  9=UR")
     print("             4=L   5=H  6=R")
     print("             1=DL  2=D  3=DR")
@@ -122,6 +128,7 @@ def delete_preset(config):
 
 def patrol_config_menu(config, save_config_fn):
     """Configure patrol positions and dwell times."""
+    _cls()
     patrol_cfg = get_patrol_config(config)
     positions = patrol_cfg.get("positions", [])
     repeat = patrol_cfg.get("repeat", True)

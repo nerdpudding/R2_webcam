@@ -445,18 +445,12 @@ function _connectMjpeg() {
         _checkServer(function(alive) {
             if (!_streaming || _mseActive) return;
             if (!alive) {
-                // Server down — show disconnected, keep watchdog running to detect comeback
                 log("Server unreachable");
+                clearInterval(_mjpegWatchdog); _mjpegWatchdog = null;
                 img.onload = null;
                 img.removeAttribute("src");
                 s.textContent = "DISCONNECTED"; s.className = "stopped";
-            } else if (s.className !== "live") {
-                // Server up but stream not live — reconnect
-                log("Server alive, reconnecting MJPEG");
-                img.onload = function() {
-                    if (_streaming) { s.textContent = "LIVE"; s.className = "live"; }
-                };
-                img.src = "/api/mjpeg?t=" + Date.now();
+                _streamTimer = setTimeout(_connectMjpeg, 5000);
             }
         });
     }, 8000);

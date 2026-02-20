@@ -117,21 +117,14 @@ def ptz_menu(config):
     _ptz_mod.ptz_menu(config, _patrol, save_config)
 
 
-def open_viewer(config, open_browser=True):
-    """Start proxy server (and optionally open web viewer in browser)."""
+def _start_server(config):
+    """Start the proxy server."""
     global _viewer_server
     if _viewer_server is None:
         _server.start(config, _mjpeg, _server_ctx)
         _viewer_server = True
     else:
-        print("  Server already running on port 8088")
-
-    if open_browser:
-        _cam_ctl.generate_viewer(config)
-        url = "http://localhost:8088/nerdcam.html"
-        subprocess.Popen(["xdg-open", url],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"  Web viewer opened: {url}")
+        print("  Server already running")
 
 
 def _stop_server():
@@ -245,95 +238,86 @@ def main():
     else:
         _cam_ctl.sync_time(config, quiet=True)
 
-    first = True
+    _last_msg = ""
+
     while True:
         server_status = "RUNNING" if _viewer_server else "stopped"
         quality_label = f"{_stream_quality}/10"
 
-        if not first:
-            input("\n  Press Enter to continue...")
-        first = False
-
         cls()
         print(f"--- NerdCam --- [server: {server_status}] [quality: {quality_label}]")
-        print("  1. Open web viewer (live stream + camera controls)")
-        print("  2. Start stream server (for NerdPudding / VLC / other apps)")
-        print("  3. Show stream URLs")
-        print("  4. Advanced settings")
-        print("  5. Stop server")
+        if _last_msg:
+            print(f"  {_last_msg}")
+            _last_msg = ""
+        if _viewer_server:
+            print(f"  Viewer: http://localhost:8088/nerdcam.html")
+            print(f"  MJPEG:  http://localhost:8088/api/mjpeg")
+            print(f"  fMP4:   http://localhost:8088/api/fmp4")
+        print()
+        toggle_label = "Stop server" if _viewer_server else "Start server"
+        print(f"  1. {toggle_label}")
+        print("  2. Settings")
         print("  q. Quit")
         choice = input("\nChoice: ").strip().lower()
 
         if choice == "1":
-            open_viewer(config, open_browser=True)
-        elif choice == "2":
-            open_viewer(config, open_browser=False)
             if _viewer_server:
-                print(f"\n  Server running. Stream URLs (no password needed):")
-                print(f"    Video only:     http://localhost:8088/api/mjpeg  (MJPEG, ~1s)")
-                print(f"    Video + audio:  http://localhost:8088/api/fmp4   (fMP4, ~3s)")
-                print(f"    Snapshot:       http://localhost:8088/api/snap")
-                print(f"\n  Use in NerdPudding, VLC, or browser. Server stays running.")
-        elif choice == "3":
-            _cam_ctl.show_stream_url(config, _viewer_server)
-        elif choice == "4":
-            _advanced_menu(config)
-        elif choice == "5":
-            _stop_server()
+                _stop_server()
+                _last_msg = "Server stopped"
+            else:
+                _start_server(config)
+                _last_msg = "Server started on port 8088"
+        elif choice == "2":
+            _settings_menu(config)
         elif choice == "q":
             if _patrol.running:
-                print("  Stopping patrol...")
                 _stop_patrol()
             if _recorder.is_recording:
-                print("  Stopping recording...")
                 _stop_recording()
             _stop_server() if _viewer_server else None
             break
-        else:
-            print("  Unknown choice")
 
 
-def _advanced_menu(config):
-    """Advanced settings submenu."""
-    global _viewer_server, _stream_quality
-
-    first = True
+def _settings_menu(config):
+    """Settings menu with categorized submenus."""
     while True:
-        if not first:
-            input("\n  Press Enter to continue...")
-        first = False
-
         cls()
-        print("--- Advanced Settings ---")
-        print("  CAMERA CONTROL")
-        print("    1. PTZ control (pan/tilt/presets/speed)")
-        print("    2. Image (brightness/contrast/mirror/flip)")
-        print("    3. Infrared / night vision")
-        print("    4. Video settings (resolution/framerate/bitrate)")
-        print("    5. Motion detection")
-        print("    6. Audio settings")
-        print("  STREAM")
-        print("    7. Stream compression quality")
-        print("    8. Watch stream in ffplay")
-        print("    9. Test RTSP (OpenCV)")
-        print("    0. Snapshot (save JPG)")
-        print("  NETWORK")
-        print("    w. WiFi status")
-        print("    n. Configure WiFi")
-        print("    p. Port info")
-        print("  AUDIO")
-        print("    m. Mic gain")
-        print("  OVERLAY")
-        print("    o. OSD (timestamp / camera name)")
-        print("  RECORDING")
-        print("    e. Local recording (start/stop)")
-        print("  SYSTEM")
-        print("    i. Device info")
-        print("    t. Sync time from PC")
-        print("    r. Reboot camera")
-        print("    x. Raw CGI command")
-        print("    c. Update credentials")
-        print("    b. Back to main menu")
+        print("--- Settings ---")
+        print("  1. Camera (PTZ, image, IR, video, motion, audio)")
+        print("  2. Stream (quality, mic gain, snapshot)")
+        print("  3. Recording")
+        print("  4. Network (WiFi, ports)")
+        print("  5. System (device info, time, reboot, credentials)")
+        print("  b. Back")
+        choice = input("\nChoice: ").strip().lower()
+
+        if choice == "1":
+            _camera_menu(config)
+        elif choice == "2":
+            _stream_menu(config)
+        elif choice == "3":
+            _recording_menu(config)
+        elif choice == "4":
+            _network_menu(config)
+        elif choice == "5":
+            _system_menu(config)
+        elif choice == "b":
+            break
+
+
+def _camera_menu(config):
+    """Camera control submenu."""
+    while True:
+        cls()
+        print("--- Camera ---")
+        print("  1. PTZ control (pan/tilt/presets/patrol)")
+        print("  2. Image (brightness/contrast/mirror/flip)")
+        print("  3. Infrared / night vision")
+        print("  4. Video encoding (resolution/framerate/bitrate/GOP)")
+        print("  5. Motion detection")
+        print("  6. Audio settings")
+        print("  7. OSD overlay (timestamp/name)")
+        print("  b. Back")
         choice = input("\nChoice: ").strip().lower()
 
         if choice == "1":
@@ -349,39 +333,95 @@ def _advanced_menu(config):
         elif choice == "6":
             _cam_ctl.audio_menu(config)
         elif choice == "7":
-            _compression_menu(config)
-        elif choice == "8":
-            _cam_ctl.watch_stream(config)
-        elif choice == "9":
-            _cam_ctl.test_rtsp(config)
-        elif choice == "0":
-            _cam_ctl.take_snapshot(config)
-        elif choice == "w":
-            _cam_ctl.show_wifi_status(config)
-        elif choice == "n":
-            _cam_ctl.configure_wifi(config)
-        elif choice == "p":
-            _cam_ctl.show_ports(config)
-        elif choice == "i":
-            _cam_ctl.show_device_info(config)
-        elif choice == "t":
-            _cam_ctl.sync_time(config)
-        elif choice == "r":
-            _cam_ctl.reboot_camera(config)
-        elif choice == "x":
-            _cam_ctl.raw_command(config)
-        elif choice == "m":
-            _mic_gain_menu(config)
-        elif choice == "o":
             _cam_ctl.osd_menu(config)
-        elif choice == "e":
-            _recording_menu(config)
-        elif choice == "c":
+        elif choice == "b":
+            break
+
+
+def _stream_menu(config):
+    """Stream settings submenu."""
+    while True:
+        cls()
+        print(f"--- Stream --- [quality: {_stream_quality}/10] [mic gain: {_mic_gain}x]")
+        print("  1. Stream compression quality")
+        print("  2. Mic gain")
+        print("  3. Take snapshot")
+        print("  4. Watch stream in ffplay")
+        print("  5. Test RTSP (OpenCV)")
+        print("  6. Show stream URLs")
+        print("  b. Back")
+        choice = input("\nChoice: ").strip().lower()
+
+        if choice == "1":
+            _compression_menu(config)
+        elif choice == "2":
+            _mic_gain_menu(config)
+        elif choice == "3":
+            _cam_ctl.take_snapshot(config)
+            input("\n  Enter to continue...")
+        elif choice == "4":
+            _cam_ctl.watch_stream(config)
+        elif choice == "5":
+            _cam_ctl.test_rtsp(config)
+            input("\n  Enter to continue...")
+        elif choice == "6":
+            _cam_ctl.show_stream_url(config, _viewer_server)
+            input("\n  Enter to continue...")
+        elif choice == "b":
+            break
+
+
+def _network_menu(config):
+    """Network submenu."""
+    while True:
+        cls()
+        print("--- Network ---")
+        print("  1. WiFi status")
+        print("  2. Configure WiFi")
+        print("  3. Port info")
+        print("  b. Back")
+        choice = input("\nChoice: ").strip().lower()
+
+        if choice == "1":
+            _cam_ctl.show_wifi_status(config)
+            input("\n  Enter to continue...")
+        elif choice == "2":
+            _cam_ctl.configure_wifi(config)
+        elif choice == "3":
+            _cam_ctl.show_ports(config)
+            input("\n  Enter to continue...")
+        elif choice == "b":
+            break
+
+
+def _system_menu(config):
+    """System submenu."""
+    while True:
+        cls()
+        print("--- System ---")
+        print("  1. Device info")
+        print("  2. Sync time from PC")
+        print("  3. Reboot camera")
+        print("  4. Raw CGI command")
+        print("  5. Update credentials")
+        print("  b. Back")
+        choice = input("\nChoice: ").strip().lower()
+
+        if choice == "1":
+            _cam_ctl.show_device_info(config)
+            input("\n  Enter to continue...")
+        elif choice == "2":
+            _cam_ctl.sync_time(config)
+            input("\n  Enter to continue...")
+        elif choice == "3":
+            _cam_ctl.reboot_camera(config)
+        elif choice == "4":
+            _cam_ctl.raw_command(config)
+            input("\n  Enter to continue...")
+        elif choice == "5":
             _cam_ctl.update_credentials(config, save_config)
         elif choice == "b":
             break
-        else:
-            print("  Unknown choice")
 
 
 def _start_recording(config):
@@ -436,6 +476,7 @@ atexit.register(_patrol.cleanup)
 def _recording_menu(config):
     """CLI menu for local recording."""
     global _rec_codec, _rec_compression, _rec_gpu
+    cls()
     print("\n--- Local Recording ---")
     rec_dir = _recorder.output_dir
     print(f"  Save location: {rec_dir}")
@@ -521,7 +562,8 @@ def _recording_menu(config):
 def _mic_gain_menu(config):
     """Set microphone gain for audio stream."""
     global _mic_gain
-    print(f"\n--- Mic Gain ---")
+    cls()
+    print("--- Mic Gain ---")
     print(f"  Current: {_mic_gain}x")
     print("  Range: 1.0 (quiet) to 5.0 (loud)")
     val = input(f"  New gain [{_mic_gain}]: ").strip()
@@ -545,7 +587,8 @@ def _mic_gain_menu(config):
 def _compression_menu(config):
     """Set stream compression quality."""
     global _stream_quality
-    print("\n--- Stream Compression Quality ---")
+    cls()
+    print("--- Stream Compression Quality ---")
     print(f"  Current: {_stream_quality}/10")
     print()
     print("  Scale 1-10:")

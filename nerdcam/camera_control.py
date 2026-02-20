@@ -15,8 +15,13 @@ from nerdcam.camera_cgi import cgi, ok, show_dict
 from nerdcam.state import PROJECT_DIR
 
 
+def _cls():
+    os.system("clear" if os.name != "nt" else "cls")
+
+
 def show_device_info(config):
-    print("\n--- Device Info ---")
+    _cls()
+    print("--- Device Info ---")
     data = cgi("getDevInfo", config)
     if not ok(data, "getDevInfo"):
         return False
@@ -26,7 +31,8 @@ def show_device_info(config):
 
 
 def show_wifi_status(config):
-    print("\n--- WiFi Status ---")
+    _cls()
+    print("--- WiFi Status ---")
     data = cgi("getWifiConfig", config)
     if not ok(data, "getWifiConfig"):
         return
@@ -36,7 +42,8 @@ def show_wifi_status(config):
 
 
 def scan_wifi(config):
-    print("\n--- Scanning WiFi ---")
+    _cls()
+    print("--- Scanning WiFi ---")
     cgi("refreshWifiList", config)
     print("  Waiting 4 seconds for scan...")
     time.sleep(4)
@@ -59,7 +66,8 @@ def scan_wifi(config):
 
 
 def configure_wifi(config):
-    print("\n--- Configure WiFi ---")
+    _cls()
+    print("--- Configure WiFi ---")
     wifi = config["wifi"]
     ssid = wifi.get("ssid", "")
     psk = wifi.get("password", "")
@@ -93,7 +101,8 @@ def configure_wifi(config):
 
 
 def show_ports(config):
-    print("\n--- Port Info ---")
+    _cls()
+    print("--- Port Info ---")
     data = cgi("getPortInfo", config)
     if not ok(data, "getPortInfo"):
         return
@@ -102,7 +111,8 @@ def show_ports(config):
 
 
 def reboot_camera(config):
-    print("\n--- Reboot Camera ---")
+    _cls()
+    print("--- Reboot Camera ---")
     confirm = input("  Reboot the camera? (y/n): ").strip().lower()
     if confirm != "y":
         print("  Cancelled")
@@ -121,7 +131,8 @@ def sync_time(config, quiet=False):
     import time as _time
 
     if not quiet:
-        print("\n--- Sync Time ---")
+        _cls()
+    print("--- Sync Time ---")
     now = _dt.datetime.now()
 
     if not quiet:
@@ -163,7 +174,8 @@ def sync_time(config, quiet=False):
 
 
 def image_menu(config):
-    print("\n--- Image Settings ---")
+    _cls()
+    print("--- Image Settings ---")
     data = cgi("getImageSetting", config)
     if ok(data, "getImageSetting"):
         show_dict(data)
@@ -210,7 +222,8 @@ def image_menu(config):
 
 
 def ir_menu(config):
-    print("\n--- Infrared (Night Vision) ---")
+    _cls()
+    print("--- Infrared (Night Vision) ---")
     data = cgi("getInfraLedConfig", config)
     if ok(data, "getInfraLedConfig"):
         mode = data.get("mode", "?")
@@ -243,7 +256,8 @@ def ir_menu(config):
 
 
 def audio_menu(config):
-    print("\n--- Audio Settings ---")
+    _cls()
+    print("--- Audio Settings ---")
     print("  Probing audio capabilities...")
     vol_data = cgi("getAudioVolume", config)
     if ok(vol_data, "getAudioVolume"):
@@ -314,7 +328,8 @@ def _set_stream_param(config, stream=0, **overrides):
 
 
 def video_settings(config):
-    print("\n--- Video Stream Settings ---")
+    _cls()
+    print("--- Video Encoding ---")
 
     data = cgi("getVideoStreamParam", config)
     if not ok(data, "getVideoStreamParam"):
@@ -381,7 +396,8 @@ def video_settings(config):
 
 
 def motion_detection(config):
-    print("\n--- Motion Detection ---")
+    _cls()
+    print("--- Motion Detection ---")
     data = cgi("getMotionDetectConfig", config)
     if ok(data, "getMotionDetectConfig"):
         enabled = data.get("isEnable", "?")
@@ -419,7 +435,8 @@ def motion_detection(config):
 
 def osd_menu(config):
     """Toggle OSD overlays (timestamp, device name) on camera stream."""
-    print("\n--- OSD Overlay ---")
+    _cls()
+    print("--- OSD Overlay ---")
     data = cgi("getOSDSetting", config)
     if not ok(data, "getOSDSetting"):
         return
@@ -462,7 +479,8 @@ def osd_menu(config):
 
 def take_snapshot(config):
     """Save a JPEG snapshot to disk."""
-    print("\n--- Snapshot ---")
+    _cls()
+    print("--- Snapshot ---")
     cam = config["camera"]
     url = (f"http://{cam['ip']}:{cam['port']}/cgi-bin/CGIProxy.fcgi"
            f"?cmd=snapPicture2&usr={urllib.parse.quote(cam['username'])}"
@@ -479,7 +497,8 @@ def take_snapshot(config):
 
 
 def raw_command(config):
-    print("\n--- Raw CGI Command ---")
+    _cls()
+    print("--- Raw CGI Command ---")
     print("  Enter a CGI command name (e.g. getDevState, getSystemTime)")
     cmd = input("  Command: ").strip()
     if not cmd:
@@ -491,28 +510,10 @@ def raw_command(config):
         print("  No response")
 
 
-def generate_viewer(config):
-    """Generate nerdcam.html with credentials baked in."""
-    cam = config["camera"]
-    html_path = os.path.join(PROJECT_DIR, "nerdcam.html")
-    template_path = os.path.join(PROJECT_DIR, "nerdcam_template.html")
-    if not os.path.exists(template_path):
-        print(f"  Template not found: {template_path}")
-        return
-    with open(template_path) as f:
-        html = f.read()
-    html = html.replace("__CAM_HOST__", cam["ip"])
-    html = html.replace("__CAM_PORT__", str(cam["port"]))
-    html = html.replace("__CAM_USER__", cam["username"])
-    html = html.replace("__CAM_PASS__", cam["password"])
-    with open(html_path, "w") as f:
-        f.write(html)
-    os.chmod(html_path, 0o600)
-    print(f"  Generated: {html_path}")
-
 
 def show_stream_url(config, viewer_server):
-    print("\n--- Stream URLs (no credentials needed) ---")
+    _cls()
+    print("--- Stream URLs (no credentials needed) ---")
     if viewer_server is None:
         print("  WARNING: Server not running! Start it first.\n")
     print("  VIDEO ONLY (lowest latency, ~1s):")
@@ -571,7 +572,8 @@ def test_rtsp(config):
 
 
 def update_credentials(config, save_config_fn):
-    print("\n--- Update Credentials ---")
+    _cls()
+    print("--- Update Credentials ---")
     print("  Leave blank to keep current value.")
     new_ip = input(f"  Camera IP [{config['camera']['ip']}]: ").strip()
     if new_ip:

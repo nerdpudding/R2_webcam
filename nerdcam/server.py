@@ -144,6 +144,16 @@ def _make_handler(cam, cam_base, mjpeg, ctx, server_instance):
         def log_message(self, format, *args):
             pass
 
+        def do_HEAD(self):
+            """Handle HEAD requests for health checks and browser probes."""
+            parsed = urlparse(self.path)
+            if parsed.path.startswith("/api/"):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+            else:
+                super().do_HEAD()
+
         def _json_response(self, data, status=200):
             """Send a JSON response."""
             body = json.dumps(data).encode()
@@ -191,6 +201,11 @@ def _make_handler(cam, cam_base, mjpeg, ctx, server_instance):
 
             if parsed.path == "/api/fmp4":
                 self._handle_fmp4()
+                return
+
+            # Serve viewer page from template (server-side rendered, no file on disk)
+            if parsed.path in ("/nerdcam.html", "/", "/index.html"):
+                self._handle_viewer()
                 return
 
             # Default: serve static files
@@ -489,5 +504,27 @@ def _make_handler(cam, cam_base, mjpeg, ctx, server_instance):
                         proc.kill()
                     except Exception:
                         pass
+
+        def _handle_viewer(self):
+            """Serve the web viewer, rendered from template with credentials."""
+            import os
+            template = os.path.join(PROJECT_DIR, "nerdcam_template.html")
+            try:
+                with open(template) as f:
+                    html = f.read()
+            except FileNotFoundError:
+                self._error_json(404, "Viewer template not found")
+                return
+            html = html.replace("__CAM_HOST__", cam["ip"])
+            html = html.replace("__CAM_PORT__", str(cam["port"]))
+            html = html.replace("__CAM_USER__", cam["username"])
+            html = html.replace("__CAM_PASS__", cam["password"])
+            body = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
     return ProxyHandler
